@@ -1,0 +1,150 @@
+import os
+import sys
+import json
+import logging
+import threading
+from datetime import datetime
+
+# Cấu hình logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+class EnforcementCore:
+    HOSTS_MARKER_START = "# === LAPTOP-MONITOR START ==="
+    HOSTS_MARKER_END = "# === LAPTOP-MONITOR END ==="
+
+    def __init__(self, offline_queue, config_dir=None):
+        self.offline_queue = offline_queue
+        if config_dir is None:
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            config_dir = os.path.join(base_dir, "config")
+
+        self.settings_cache_path = os.path.join(config_dir, "settings_cache.json")
+        self.hosts_path = r"C:\Windows\System32\drivers\etc\hosts"
+        self.lock = threading.Lock()
+
+    def load_cached_settings(self):
+        """Đọc cài đặt settings và blacklist đã được cache từ file JSON."""
+        if os.path.exists(self.settings_cache_path):
+            try:
+                with open(self.settings_cache_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                logging.error(f"Failed to read settings cache: {e}")
+
+        # Config mặc định an toàn nếu chưa có cache
+        return {
+            "daily_limit_minutes": 120,
+            "allowed_start_time": "07:00:00",
+            "allowed_end_time": "21:00:00",
+            "is_locked": False,
+            "enable_webcam_monitoring": False,
+            "blacklisted_domains": []
+        }
+
+    def save_settings_cache(self, config_data, blacklisted_domains=None):
+        """Lưu cài đặt settings và danh sách blacklist vào file cache cục bộ."""
+        try:
+            cache_data = config_data.copy() if config_data else {}
+            if blacklisted_domains is not None:
+                cache_data["blacklisted_domains"] = blacklisted_domains
+            elif "blacklisted_domains" not in cache_data:
+                existing = self.load_cached_settings()
+                cache_data["blacklisted_domains"] = existing.get("blacklisted_domains", [])
+
+            with open(self.settings_cache_path, "w", encoding="utf-8") as f:
+                json.dump(cache_data, f, indent=2)
+
+            # Đồng thời cập nhật file Hosts hệ thống với danh sách domain cấm mới
+            self.update_hosts_file(cache_data.get("blacklisted_domains", []))
+        except Exception as e:
+            logging.error(f"Failed to save settings cache: {e}")
+
+    def update_hosts_file(self, blacklisted_domains):
+        """Cập nhật file C:\\Windows\\System32\\drivers\\etc\\hosts để chặn domain cấm chủ động."""
+        with self.lock:
+            try:
+                if not os.path.exists(self.hosts_path):
+                    logging.error(f"Hosts file not found at {self.hosts_path}")
+                    return
+
+                # Đọc nội dung file hosts hiện tại
+                with open(self.hosts_path, "r", encoding="utf-8", errors="ignore") as f:
+                    lines = f.readlines()
+
+                # Lọc bỏ khối nội dung giữa 2 marker cũ
+                new_lines = []
+                inside_block = False
+                for line in lines:
+                    if self.HOSTS_MARKER_START in line:
+                        inside_block = True
+                        continue
+                    if self.HOSTS_MARKER_END in line:
+                        inside_block = False
+                        continue
+                    if not inside_block:
+                        new_lines.append(line)
+
+                # Tạo khối nội dung chặn mới nếu có domain cấm
+                if blacklisted_domains:
+                    new_lines.append(f"\n{self.HOSTS_MARKER_START}\n")
+                    for domain in blacklisted_domains:
+                        clean_domain = domain.strip().lower()
+                        if clean_domain:
+                            new_lines.append(f"127.0.0.1 {clean_domain}\n")
+                            if not clean_domain.startswith("www."):
+                                new_lines.append(f"127.0.0.1 www.{clean_domain}\n")
+                    new_lines.append(f"{self.HOSTS_MARKER_END}\n")
+
+                # Ghi lại file Hosts
+                with open(self.hosts_path, "w", encoding="utf-8") as f:
+                    f.writelines(new_lines)
+
+                # Làm mới DNS cache của Windows
+                os.system("ipconfig /flushdns > nul")
+                logging.info(f"Updated Windows Hosts file with {len(blacklisted_domains)} blacklisted domains.")
+            except Exception as e:
+                logging.error(f"Failed to update Hosts file (Check admin rights): {e}")
+
+    def check_policy_status(self):
+        """
+        Kiểm tra các quy định chính sách:
+        1. is_locked == True -> Khóa ngay lập tức.
+        2. Thời gian hiện tại nằm ngoài khung giờ allowed_start_time - allowed_end_time -> Khóa.
+        3. Tổng thời gian dùng máy hôm nay (từ SQLite daily_usage) > daily_limit_minutes -> Khóa.
+        
+        @returns tuple: (should_lock: bool, reason: str, seconds_remaining: int)
+        """
+        settings = self.load_cached_settings()
+
+        # 1. Kiểm tra cờ khóa máy thủ công từ phụ huynh
+        if settings.get("is_locked", False):
+            return True, "Parent has manually locked the device.", 0
+
+        now = datetime.now()
+        current_time_str = now.strftime("%H:%M:%S")
+
+        start_time_str = settings.get("allowed_start_time", "07:00:00")
+        end_time_str = settings.get("allowed_end_time", "21:00:00")
+
+        # 2. Kiểm tra khung giờ cho phép
+        try:
+            cur_t = datetime.strptime(current_time_str, "%H:%M:%S").time()
+            start_t = datetime.strptime(start_time_str, "%H:%M:%S").time()
+            end_t = datetime.strptime(end_time_str, "%H:%M:%S").time()
+
+            if not (start_t <= cur_t <= end_t):
+                return True, f"Outside allowed usage hours ({start_time_str} - {end_time_str}).", 0
+        except Exception as e:
+            logging.error(f"Time parsing error: {e}")
+
+        # 3. Kiểm tra tổng thời gian sử dụng trong ngày
+        daily_limit_minutes = settings.get("daily_limit_minutes", 120)
+        max_allowed_seconds = daily_limit_minutes * 60
+
+        used_seconds = self.offline_queue.get_daily_usage()
+        remaining_seconds = max_allowed_seconds - used_seconds
+
+        if remaining_seconds <= 0:
+            return True, f"Daily limit of {daily_limit_minutes} minutes has been exceeded.", 0
+
+        return False, "OK", remaining_seconds
