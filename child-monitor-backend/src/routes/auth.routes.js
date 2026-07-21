@@ -25,4 +25,7 @@ router.post('/forgot-password', forgotPasswordLimiter, authController.forgotPass
 router.post('/reset-password', resetPasswordLimiter, authController.resetPassword);
 router.post('/refresh', authController.refresh);
 
+// Delete account (GDPR Privacy right to be forgotten)
+router.delete('/account', auth, authController.deleteAccount);
+
 module.exports = router;

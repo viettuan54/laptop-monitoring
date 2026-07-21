@@ -24,7 +24,7 @@ DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_backend') THEN
         -- WARNING: Replace 'CHANGE_ME_BACKEND_PASSWORD' with a real strong password
-        CREATE ROLE app_backend LOGIN PASSWORD 'Viettuan54@';
+        CREATE ROLE app_backend LOGIN PASSWORD 'CHANGE_ME_STRONG_PASSWORD';
         RAISE NOTICE 'Role app_backend created.';
     ELSE
         RAISE NOTICE 'Role app_backend already exists, skipping.';

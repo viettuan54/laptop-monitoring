@@ -48,6 +48,13 @@ exports.registerDevice = async (req, res) => {
     return res.status(400).json({ message: 'device_uid cannot exceed 150 characters' });
   }
 
+  // Validate format của device_uid: Chỉ cho phép chữ, số, dấu gạch ngang, gạch dưới, và dấu hai chấm
+  // Thường dùng cho UUID, địa chỉ MAC, hoặc chuỗi định danh phần cứng tiêu chuẩn.
+  const deviceUidRegex = /^[a-zA-Z0-9_\-:]+$/;
+  if (!deviceUidRegex.test(device_uid)) {
+    return res.status(400).json({ message: 'device_uid contains invalid characters. Only alphanumeric, -, _, and : are allowed.' });
+  }
+
   try {
     // Sinh ngẫu nhiên plaintext UUID làm device secret
     const plaintextSecret = uuidv4();

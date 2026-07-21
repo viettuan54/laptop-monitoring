@@ -11,11 +11,12 @@ exports.heartbeat = async (req, res) => {
   const { device_id, child_id } = req.device;
 
   try {
-    // Cập nhật last_seen_at
-    await adminPool.query(
-      'UPDATE devices SET last_seen_at = NOW() WHERE device_id = $1',
+    // Cập nhật last_seen_at và lấy giá trị vừa ghi để trả về cho Agent xác nhận
+    const updateResult = await adminPool.query(
+      'UPDATE devices SET last_seen_at = NOW() WHERE device_id = $1 RETURNING last_seen_at',
       [device_id]
     );
+    const last_seen_at = updateResult.rows[0]?.last_seen_at ?? new Date();
 
     // Lấy config hiện tại để trả về ngay cùng response
     // Agent sẽ dùng để kiểm tra is_locked, time limit, v.v.
@@ -40,6 +41,7 @@ exports.heartbeat = async (req, res) => {
     res.json({
       message: 'Heartbeat received',
       server_time: new Date().toISOString(),
+      last_seen_at: last_seen_at instanceof Date ? last_seen_at.toISOString() : last_seen_at,
       config,
     });
   } catch (error) {
@@ -66,7 +68,8 @@ exports.getConfig = async (req, res) => {
       [child_id]
     );
 
-    // Lấy danh sách blacklist để Agent kiểm tra website cục bộ (không cần gọi server mỗi lần)
+    // Lấy danh sách blacklist toàn cục do admin quản lý để Agent kiểm tra website cục bộ.
+    // website_blacklist là bảng global (không phân theo child/user) → lấy toàn bộ là đúng thiết kế.
     const blacklistResult = await adminPool.query(
       'SELECT domain FROM website_blacklist ORDER BY domain ASC'
     );
@@ -126,6 +129,19 @@ exports.sendVisionAlert = async (req, res) => {
   const trimmedMessage = message.trim().substring(0, 500);
 
   try {
+    // ── Bảo mật: Kiểm tra xem phụ huynh có BẬT tính năng giám sát webcam không ──
+    const settingsCheck = await adminPool.query(
+      'SELECT enable_webcam_monitoring FROM settings WHERE child_id = $1',
+      [req.device.child_id]
+    );
+    const hasWebcamEnabled = settingsCheck.rows[0]?.enable_webcam_monitoring ?? false;
+
+    if (!hasWebcamEnabled) {
+      return res.status(403).json({
+        message: 'Webcam monitoring feature is disabled for this child. Vision alert rejected.',
+      });
+    }
+
     // Kiểm tra xem đã có cảnh báo cùng loại trong 5 phút qua chưa.
     // Tránh tạo hàng nghìn alert trùng lặp khi Agent phát hiện liên tục.
     const recentAlert = await adminPool.query(

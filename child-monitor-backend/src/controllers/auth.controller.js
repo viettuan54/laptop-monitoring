@@ -545,3 +545,45 @@ exports.refresh = async (req, res) => {
     res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+// ────────────────────────────────────────────────────────────────
+// DELETE /api/auth/account
+// Phụ huynh xóa hoàn toàn tài khoản và dữ liệu hệ thống (Quyền được lãng quên)
+// Yêu cầu xác thực JWT + truyền password để xác nhận hành động.
+// ────────────────────────────────────────────────────────────────
+exports.deleteAccount = async (req, res) => {
+  const { password } = req.body;
+  const user_id = req.user.user_id; // Đã qua middleware auth
+
+  if (!password) {
+    return res.status(400).json({ message: 'Password is required to confirm account deletion' });
+  }
+
+  try {
+    // 1. Kiểm tra sự tồn tại của user và đối chiếu mật khẩu
+    const userResult = await adminPool.query(
+      'SELECT password FROM users WHERE user_id = $1',
+      [user_id]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const isMatch = await bcrypt.compare(password, userResult.rows[0].password);
+    if (!isMatch) {
+      return res.status(401).json({ message: 'Incorrect password. Deletion cancelled.' });
+    }
+
+    // 2. Tiến hành xóa tài khoản. DB với ON DELETE CASCADE trên children, devices, logs, v.v.
+    // sẽ tự động dọn dẹp sạch toàn bộ dữ liệu đi kèm.
+    await adminPool.query('DELETE FROM users WHERE user_id = $1', [user_id]);
+
+    res.json({
+      message: 'Your account and all associated child data have been permanently deleted.'
+    });
+  } catch (error) {
+    console.error('Delete account error:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+};
