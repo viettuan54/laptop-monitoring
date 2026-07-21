@@ -14,11 +14,12 @@ function validatePassword(password) {
   }
   
   const minLength = 8;
+  const maxLength = 128;
   const hasUpperCase = /[A-Z]/.test(password);
   const hasDigit = /[0-9]/.test(password);
   const hasSpecial = /[!@#$%^&*(),.?":{}|<>]/.test(password);
   
-  return password.length >= minLength && hasUpperCase && hasDigit && hasSpecial;
+  return password.length >= minLength && password.length <= maxLength && hasUpperCase && hasDigit && hasSpecial;
 }
 
 module.exports = {

@@ -293,7 +293,7 @@ exports.logAppBatch = async (req, res) => {
       `INSERT INTO app_usage(client_record_id, device_id, app_name, category, start_time, end_time, duration_seconds)
        SELECT
          unnest($1::text[]),
-         $2::uuid,
+         $2::int,
          unnest($3::text[]),
          unnest($4::text[]),
          unnest($5::timestamptz[]),
@@ -418,7 +418,7 @@ exports.logWebBatch = async (req, res) => {
       `INSERT INTO website_logs(client_record_id, device_id, url, domain, category, visit_time, duration_seconds, page_title)
        SELECT
          unnest($1::text[]),
-         $2::uuid,
+         $2::int,
          unnest($3::text[]),
          unnest($4::text[]),
          unnest($5::text[]),
