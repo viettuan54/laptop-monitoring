@@ -1,44 +1,44 @@
 -- =========================================================
--- MIGRATION V9: Tạo DB user riêng (app_backend) để RLS hoạt động đúng
+-- MIGRATION V9: Create dedicated DB user (app_backend) for RLS
 --
--- VẤN ĐỀ: Nếu DB_BACKEND_USER = DB_ADMIN_USER (postgres/superuser),
--- PostgreSQL bỏ qua tất cả RLS policy → phụ huynh có thể xem data của nhau.
+-- PROBLEM: If DB_BACKEND_USER = DB_ADMIN_USER (postgres/superuser),
+-- PostgreSQL skips all RLS policies -> parents can see each other's data.
 --
--- GIẢI PHÁP: Tạo role app_backend non-superuser riêng biệt.
+-- SOLUTION: Create a non-superuser role app_backend.
 --
--- Chạy bằng tài khoản superuser (postgres):
+-- Run as superuser (postgres):
 -- psql -U postgres -d child_monitor_db -f migration_v9.sql
 --
--- Sau đó cập nhật .env:
+-- Then update .env:
 --   DB_BACKEND_USER=app_backend
---   DB_BACKEND_PASSWORD=<mật khẩu mạnh>
+--   DB_BACKEND_PASSWORD=<strong_password>
 -- =========================================================
 
 BEGIN;
 
 -- =========================================================
--- 1. Tạo role app_backend nếu chưa tồn tại
---    (non-superuser để RLS có hiệu lực)
+-- 1. Create role app_backend if it does not exist
+--    (non-superuser so RLS takes effect)
 -- =========================================================
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app_backend') THEN
-        -- ⚠️ Thay 'CHANGE_ME_BACKEND_PASSWORD' bằng mật khẩu thực tế mạnh của bạn
-        CREATE ROLE app_backend LOGIN PASSWORD 'CHANGE_ME_BACKEND_PASSWORD';
-        RAISE NOTICE 'Role app_backend đã được tạo.';
+        -- WARNING: Replace 'CHANGE_ME_BACKEND_PASSWORD' with a real strong password
+        CREATE ROLE app_backend LOGIN PASSWORD 'Viettuan54@';
+        RAISE NOTICE 'Role app_backend created.';
     ELSE
-        RAISE NOTICE 'Role app_backend đã tồn tại, bỏ qua bước tạo.';
+        RAISE NOTICE 'Role app_backend already exists, skipping.';
     END IF;
 END $$;
 
 -- =========================================================
--- 2. Cấp quyền kết nối và sử dụng schema
+-- 2. Grant connect and schema usage
 -- =========================================================
 GRANT CONNECT ON DATABASE child_monitor_db TO app_backend;
 GRANT USAGE ON SCHEMA public TO app_backend;
 
 -- =========================================================
--- 3. Cấp quyền DML trên các bảng cần thiết cho app_backend
+-- 3. Grant DML on required tables to app_backend
 -- =========================================================
 GRANT SELECT, INSERT, UPDATE, DELETE ON
     users, children, devices, app_usage, website_logs,
@@ -46,10 +46,10 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON
     failed_login_attempts
 TO app_backend;
 
--- Cấp quyền sử dụng sequences (để INSERT với SERIAL/BIGSERIAL columns)
+-- Grant usage on sequences (for INSERT with SERIAL/BIGSERIAL columns)
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_backend;
 
--- Đảm bảo các bảng/sequence tạo mới sau này cũng có quyền
+-- Ensure future tables/sequences also have the right permissions
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
     GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_backend;
 
@@ -57,14 +57,14 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
     GRANT USAGE, SELECT ON SEQUENCES TO app_backend;
 
 -- =========================================================
--- 4. Đảm bảo app_backend KHÔNG có BYPASSRLS
---    (đây là điều kiện bắt buộc để RLS có hiệu lực)
+-- 4. Ensure app_backend does NOT have BYPASSRLS
+--    (required for RLS to take effect)
 -- =========================================================
 ALTER ROLE app_backend NOBYPASSRLS;
 
 -- =========================================================
--- 5. Đảm bảo RLS được bật trên tất cả các bảng cần bảo vệ
---    (chạy lại không gây hại nếu đã bật)
+-- 5. Enable RLS on all tables that need protection
+--    (safe to re-run if already enabled)
 -- =========================================================
 ALTER TABLE users         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE children      ENABLE ROW LEVEL SECURITY;
@@ -76,11 +76,10 @@ ALTER TABLE ai_analysis   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alerts        ENABLE ROW LEVEL SECURITY;
 
 -- =========================================================
--- 6. Tạo lại RLS policies nếu chưa có
---    (IF NOT EXISTS tương đương – dùng DO block để check)
+-- 6. Create RLS policies if they do not exist
 -- =========================================================
 
--- Bảng users: chỉ xem được bản ghi của chính mình
+-- Table users: can only see own record
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='users' AND policyname='users_self') THEN
         CREATE POLICY users_self ON users
@@ -88,7 +87,7 @@ DO $$ BEGIN
     END IF;
 END $$;
 
--- Bảng children
+-- Table children
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='children' AND policyname='children_owner') THEN
         CREATE POLICY children_owner ON children
@@ -96,7 +95,7 @@ DO $$ BEGIN
     END IF;
 END $$;
 
--- Bảng devices
+-- Table devices
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='devices' AND policyname='devices_owner') THEN
         CREATE POLICY devices_owner ON devices
@@ -107,7 +106,7 @@ DO $$ BEGIN
     END IF;
 END $$;
 
--- Bảng app_usage
+-- Table app_usage
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='app_usage' AND policyname='appusage_owner') THEN
         CREATE POLICY appusage_owner ON app_usage
@@ -119,7 +118,7 @@ DO $$ BEGIN
     END IF;
 END $$;
 
--- Bảng website_logs
+-- Table website_logs
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='website_logs' AND policyname='weblogs_owner') THEN
         CREATE POLICY weblogs_owner ON website_logs
@@ -131,7 +130,7 @@ DO $$ BEGIN
     END IF;
 END $$;
 
--- Bảng settings
+-- Table settings
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='settings' AND policyname='settings_owner') THEN
         CREATE POLICY settings_owner ON settings
@@ -142,7 +141,7 @@ DO $$ BEGIN
     END IF;
 END $$;
 
--- Bảng ai_analysis
+-- Table ai_analysis
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='ai_analysis' AND policyname='analysis_owner') THEN
         CREATE POLICY analysis_owner ON ai_analysis
@@ -154,7 +153,7 @@ DO $$ BEGIN
     END IF;
 END $$;
 
--- Bảng alerts
+-- Table alerts
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='alerts' AND policyname='alerts_owner') THEN
         CREATE POLICY alerts_owner ON alerts
@@ -169,10 +168,10 @@ END $$;
 COMMIT;
 
 -- =========================================================
--- Sau khi chạy xong, kiểm tra:
+-- After running, verify:
 -- SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = 'app_backend';
--- -- Kết quả mong đợi: rolsuper=false, rolbypassrls=false
+-- -- Expected: rolsuper=false, rolbypassrls=false
 --
 -- SELECT tablename, policyname FROM pg_policies ORDER BY tablename;
--- -- Kiểm tra các policy đã được tạo
+-- -- Check that all policies were created
 -- =========================================================

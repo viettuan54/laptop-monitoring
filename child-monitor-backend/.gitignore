@@ -1,3 +1,29 @@
+# Environment variables (contains secrets/passwords)
 .env
+.env.local
+.env.*.local
+
+# Dependencies
 node_modules/
+
+# Scratch / temp files
 scratch/
+
+# Migration files containing passwords
+migration_v9.sql
+
+# Database seed / dump files (may contain sensitive data)
+Data.sql
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor directories
+.vscode/
+.idea/
