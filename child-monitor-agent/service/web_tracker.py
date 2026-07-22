@@ -119,19 +119,20 @@ class WebTracker:
             """
             cursor.execute(query, (last_visit_time,))
             rows = cursor.fetchall()
+            enqueue_failed = False
 
             for row in rows:
                 raw_url, title, visit_time, visit_duration = row
-                if visit_time > max_visit_time:
-                    max_visit_time = visit_time
 
                 # Lọc bỏ các URL nội bộ trình duyệt
                 if raw_url.startswith(("chrome://", "edge://", "about:", "file://")):
+                    max_visit_time = max(max_visit_time, visit_time)
                     continue
 
                 parsed = urlparse(raw_url)
                 domain = parsed.netloc.lower()
                 if not domain:
+                    max_visit_time = max(max_visit_time, visit_time)
                     continue
 
                 visit_iso = self.chrome_time_to_iso(visit_time)
@@ -139,7 +140,7 @@ class WebTracker:
                 page_title = title if title else domain
 
                 # Đưa log vào hàng đợi SQLite local
-                self.offline_queue.enqueue_web_log(
+                client_record_id = self.offline_queue.enqueue_web_log(
                     url=raw_url,
                     domain=domain,
                     visit_time=visit_iso,
@@ -148,10 +149,24 @@ class WebTracker:
                     category="unknown"
                 )
 
+                # Không vượt checkpoint qua visit chưa ghi được vào queue. Dừng tại
+                # lỗi đầu tiên để lần quét kế tiếp đọc lại visit này và phần sau.
+                if not client_record_id:
+                    enqueue_failed = True
+                    logging.error(
+                        f"Failed to persist browser visit for {checkpoint_key}; "
+                        "checkpoint was not advanced past this visit."
+                    )
+                    break
+
+                max_visit_time = max(max_visit_time, visit_time)
+
             conn.close()
 
             # Cập nhật checkpoint nếu có dữ liệu mới
-            if max_visit_time > last_visit_time:
+            # Nếu một enqueue thất bại, giữ checkpoint cũ để không bỏ sót các visit
+            # có cùng timestamp. Retry có thể tạo bản ghi lặp nhưng không mất dữ liệu.
+            if not enqueue_failed and max_visit_time > last_visit_time:
                 self.checkpoints[checkpoint_key] = max_visit_time
                 self.save_checkpoints()
 

@@ -314,6 +314,7 @@ exports.logAppBatch = async (req, res) => {
       duplicates: duplicateCount,
       skipped: skippedReasons.length,
       skipped_reasons: skippedReasons,
+      accepted_client_record_ids: clientIds,
     });
   } catch (error) {
     console.error('Log app batch error:', error);
@@ -439,6 +440,7 @@ exports.logWebBatch = async (req, res) => {
       duplicates: duplicateCount,
       skipped: skippedReasons.length,
       skipped_reasons: skippedReasons,
+      accepted_client_record_ids: clientIds,
     });
   } catch (error) {
     console.error('Log web batch error:', error);

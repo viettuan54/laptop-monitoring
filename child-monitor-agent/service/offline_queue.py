@@ -182,13 +182,29 @@ class OfflineQueue:
 
                 response = api_client.post("/api/logs/app/batch", data={"records": records})
                 if response and response.status_code == 201:
+                    try:
+                        response_data = response.json()
+                        accepted_ids = response_data.get("accepted_client_record_ids", [])
+                    except (ValueError, AttributeError) as e:
+                        logging.error(f"Invalid app batch acknowledgement: {e}")
+                        break
+
+                    # Fail closed nếu backend cũ/không hợp lệ không xác nhận ID cụ thể.
+                    accepted_ids = [record_id for record_id in accepted_ids if record_id in record_ids]
+                    if not accepted_ids:
+                        logging.error("App batch returned no accepted IDs; local queue was left unchanged.")
+                        break
+
                     with self.get_connection() as conn:
                         cursor = conn.cursor()
-                        # Cập nhật trạng thái đã sync
-                        placeholders = ",".join(["?"] * len(record_ids))
-                        cursor.execute(f"UPDATE app_logs SET synced = 1 WHERE client_record_id IN ({placeholders})", record_ids)
+                        # Chỉ đánh dấu những record backend xác nhận đã lưu/đã tồn tại.
+                        placeholders = ",".join(["?"] * len(accepted_ids))
+                        cursor.execute(f"UPDATE app_logs SET synced = 1 WHERE client_record_id IN ({placeholders})", accepted_ids)
                         conn.commit()
-                    logging.info(f"Successfully synced batch of {len(records)} app logs.")
+                    logging.info(f"Backend accepted {len(accepted_ids)}/{len(records)} app logs.")
+                    if len(accepted_ids) < len(record_ids):
+                        logging.warning("Rejected app logs were retained locally for inspection/retry.")
+                        break
                 else:
                     logging.error("Failed to sync app logs batch. API error.")
                     break
@@ -229,12 +245,27 @@ class OfflineQueue:
 
                 response = api_client.post("/api/logs/web/batch", data={"records": records})
                 if response and response.status_code == 201:
+                    try:
+                        response_data = response.json()
+                        accepted_ids = response_data.get("accepted_client_record_ids", [])
+                    except (ValueError, AttributeError) as e:
+                        logging.error(f"Invalid web batch acknowledgement: {e}")
+                        break
+
+                    accepted_ids = [record_id for record_id in accepted_ids if record_id in record_ids]
+                    if not accepted_ids:
+                        logging.error("Web batch returned no accepted IDs; local queue was left unchanged.")
+                        break
+
                     with self.get_connection() as conn:
                         cursor = conn.cursor()
-                        placeholders = ",".join(["?"] * len(record_ids))
-                        cursor.execute(f"UPDATE web_logs SET synced = 1 WHERE client_record_id IN ({placeholders})", record_ids)
+                        placeholders = ",".join(["?"] * len(accepted_ids))
+                        cursor.execute(f"UPDATE web_logs SET synced = 1 WHERE client_record_id IN ({placeholders})", accepted_ids)
                         conn.commit()
-                    logging.info(f"Successfully synced batch of {len(records)} web logs.")
+                    logging.info(f"Backend accepted {len(accepted_ids)}/{len(records)} web logs.")
+                    if len(accepted_ids) < len(record_ids):
+                        logging.warning("Rejected web logs were retained locally for inspection/retry.")
+                        break
                 else:
                     logging.error("Failed to sync web logs batch. API error.")
                     break
