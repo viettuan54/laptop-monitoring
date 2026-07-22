@@ -45,10 +45,8 @@ class PipeServer:
         if user_sid:
             # Cho phép User SID cụ thể của Session đang đăng nhập kết nối
             dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_READ | win32con.GENERIC_WRITE, user_sid)
-        else:
-            # Fallback cho phép Everyone nếu chưa xác định được User SID
-            sid_everyone = win32security.CreateWellKnownSid(win32security.WinWorldSid)
-            dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_READ | win32con.GENERIC_WRITE, sid_everyone)
+        # Fail closed khi chưa có user_sid: chỉ SYSTEM và Administrators được phép.
+        # Watchdog sẽ recreate pipe với đúng SID trước khi spawn Companion.
 
         sd.SetSecurityDescriptorDacl(1, dacl, 0)
         sa.SECURITY_DESCRIPTOR = sd
@@ -75,10 +73,19 @@ class PipeServer:
 
     def stop(self):
         self.running = False
+        # ConnectNamedPipe/ReadFile là blocking; đóng handle để đánh thức server loop.
+        with self.lock:
+            if self.client_handle:
+                try:
+                    win32file.CloseHandle(self.client_handle)
+                except Exception:
+                    pass
+                self.client_handle = None
 
     def _server_loop(self):
         while self.running:
             sa = self.create_security_attributes(user_sid=self.current_user_sid)
+            pipe_handle = None
             try:
                 # Tạo Named Pipe Server
                 pipe_handle = win32pipe.CreateNamedPipe(
@@ -91,11 +98,13 @@ class PipeServer:
                     sa
                 )
 
-                # Chờ kết nối từ Client (UI Companion)
-                win32pipe.ConnectNamedPipe(pipe_handle, None)
-
+                # Lưu cả listening handle trước ConnectNamedPipe. Nhờ vậy Watchdog
+                # có thể đóng listener fail-closed ban đầu và recreate với đúng SID.
                 with self.lock:
                     self.client_handle = pipe_handle
+
+                # Chờ kết nối từ Client (UI Companion)
+                win32pipe.ConnectNamedPipe(pipe_handle, None)
 
                 self._handle_client(pipe_handle)
 
@@ -103,6 +112,16 @@ class PipeServer:
                 if self.running:
                     logging.error(f"Pipe server error: {e}")
                     time.sleep(1)
+            finally:
+                # Bao phủ cả lỗi xảy ra trước khi _handle_client được gọi.
+                with self.lock:
+                    if pipe_handle is not None and self.client_handle == pipe_handle:
+                        self.client_handle = None
+                if pipe_handle is not None:
+                    try:
+                        win32file.CloseHandle(pipe_handle)
+                    except Exception:
+                        pass
 
     def _handle_client(self, pipe_handle):
         """Lắng nghe dữ liệu gửi từ UI Companion qua Pipe."""
@@ -116,7 +135,8 @@ class PipeServer:
             logging.info(f"Companion client disconnected from Pipe: {e}")
         finally:
             with self.lock:
-                self.client_handle = None
+                if self.client_handle == pipe_handle:
+                    self.client_handle = None
             try:
                 win32file.CloseHandle(pipe_handle)
             except Exception:

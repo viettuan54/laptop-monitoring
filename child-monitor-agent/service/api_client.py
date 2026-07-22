@@ -5,6 +5,7 @@ import logging
 import requests
 import win32crypt
 import base64
+from urllib.parse import urlparse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -54,7 +55,8 @@ class APIClient:
             with open(self.config_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-            self.server_url = data.get("server_url", "http://localhost:3000").rstrip("/")
+            configured_url = data.get("server_url", "http://localhost:3000").rstrip("/")
+            self.server_url = self.validate_server_url(configured_url)
             
             raw_secret = data.get("device_secret", "")
             # Nếu secret dạng plaintext UUID (chưa mã hóa), tiến hành mã hóa DPAPI rồi lưu lại
@@ -73,6 +75,24 @@ class APIClient:
         except Exception as e:
             logging.error(f"Failed to load config: {e}")
             return False
+
+    @staticmethod
+    def validate_server_url(server_url: str) -> str:
+        """Bắt buộc HTTPS; chỉ cho phép HTTP với loopback để phát triển local."""
+        parsed = urlparse(server_url)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise ValueError("server_url must be an absolute HTTP(S) URL")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("server_url must not contain credentials, query, or fragment")
+        if parsed.path not in ("", "/"):
+            raise ValueError("server_url must not contain a path")
+
+        loopback_hosts = {"localhost", "127.0.0.1", "::1"}
+        if parsed.scheme != "https" and parsed.hostname.lower() not in loopback_hosts:
+            raise ValueError("HTTPS is required for every non-loopback server_url")
+        if parsed.scheme == "http":
+            logging.warning("Using insecure HTTP for loopback development only.")
+        return server_url
 
     def check_config_reload(self):
         """Kiểm tra nếu file local_config.json được ghi mới thì tự động nạp lại và gỡ cờ suspend nếu thành công."""
@@ -115,7 +135,9 @@ class APIClient:
                     url=url,
                     headers=headers,
                     json=payload if payload is not None else None,
-                    timeout=timeout
+                    timeout=timeout,
+                    # Không tự đi theo redirect có thể hạ cấp HTTPS xuống HTTP.
+                    allow_redirects=False
                 )
 
                 # Nếu bị 401 Unauthorized -> Secret không hợp lệ / đã bị thu hồi
@@ -154,4 +176,3 @@ class APIClient:
             except Exception as e:
                 logging.error(f"Error parsing json from /api/agent/config: {e}")
         return None
-

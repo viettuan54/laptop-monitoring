@@ -20,13 +20,25 @@ if (missingEnv.length > 0) {
   process.exit(1);
 }
 
+if (process.env.NODE_ENV === 'production') {
+  const productionUrls = ['FRONTEND_URL', 'ALLOWED_ORIGIN'];
+  const invalidHttpsConfig = productionUrls.filter((key) => {
+    try {
+      return new URL(process.env[key]).protocol !== 'https:';
+    } catch (_) {
+      return true;
+    }
+  });
+  if (invalidHttpsConfig.length > 0) {
+    console.error(`❌ Production yêu cầu URL HTTPS hợp lệ: ${invalidHttpsConfig.join(', ')}`);
+    process.exit(1);
+  }
+}
+
 const app = require('./src/app');
-const { adminPool } = require('./src/config/db');
+const { adminPool, backendPool, validateRlsConfiguration } = require('./src/config/db');
 const { cleanupExpiredTokens, cleanupExpiredRefreshTokens } = require('./src/utils/tokenBlacklist');
 const { initTransporter } = require('./src/utils/email');
-
-// Khởi tạo SMTP Transporter ngay lúc khởi động (fail-fast ở production)
-initTransporter();
 
 const PORT = process.env.PORT || 3000;
 
@@ -38,13 +50,25 @@ if (!process.env.FRONTEND_URL) {
   console.warn('⚠️  Cảnh báo: Thiếu FRONTEND_URL. Link xác minh email và reset mật khẩu sẽ trỏ về http://localhost:3000 (chỉ phù hợp môi trường dev).');
 }
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running at http://localhost:${PORT}`);
-  console.log(`   NODE_ENV: ${process.env.NODE_ENV || 'development'}`);
+async function bootstrap() {
+  // Không mở cổng HTTP nếu role hoặc policy RLS đang cấu hình sai.
+  await validateRlsConfiguration();
 
-  // ── Cron Job: Dọn dữ liệu cũ mỗi ngày lúc 2:00 AM ───────────────────
-  // Sử dụng setInterval thay vì thư viện node-cron để không thêm dependency
-  scheduleCleanup();
+  // Khởi tạo SMTP Transporter sau khi kiểm tra bảo mật database thành công.
+  initTransporter();
+
+  app.listen(PORT, () => {
+    const publicScheme = process.env.NODE_ENV === 'production' ? 'https' : 'http';
+    console.log(`🚀 Server ready behind ${publicScheme}://localhost:${PORT}`);
+    console.log(`   NODE_ENV: ${process.env.NODE_ENV || 'development'}`);
+    scheduleCleanup();
+  });
+}
+
+bootstrap().catch(async (error) => {
+  console.error('❌ Backend startup aborted:', error.message);
+  await Promise.allSettled([adminPool.end(), backendPool.end()]);
+  process.exit(1);
 });
 
 /**

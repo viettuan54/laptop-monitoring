@@ -43,14 +43,57 @@ backendPool.on('error', (err) => {
   console.error('backendPool idle client error:', err.message);
 });
 
-// Cảnh báo khi khởi động nếu cả hai pool dùng cùng user
-// (RLS sẽ bị vô hiệu hóa nếu user đó là superuser)
-if (process.env.DB_BACKEND_USER === process.env.DB_ADMIN_USER) {
-  console.warn(
-    '⚠️  [RLS Warning] DB_BACKEND_USER và DB_ADMIN_USER đang trùng nhau. ' +
-    'Nếu user này là superuser/BYPASSRLS, Row Level Security sẽ bị vô hiệu hoàn toàn. ' +
-    'Hãy tạo user app_backend riêng biệt bằng cách chạy: psql -U postgres -d child_monitor_db -f migration_v9.sql'
-  );
+const RLS_TABLES = [
+  'users', 'children', 'devices', 'app_usage', 'website_logs',
+  'settings', 'ai_analysis', 'alerts',
+];
+
+async function validateRlsConfiguration() {
+  if (process.env.DB_BACKEND_USER === process.env.DB_ADMIN_USER) {
+    throw new Error('DB_BACKEND_USER must be different from DB_ADMIN_USER');
+  }
+
+  const roleResult = await backendPool.query(`
+    SELECT r.rolname, r.rolsuper, r.rolbypassrls
+    FROM pg_roles r
+    WHERE r.rolname = current_user
+  `);
+  const role = roleResult.rows[0];
+  if (!role) {
+    throw new Error('Cannot inspect DB backend role');
+  }
+  if (role.rolsuper || role.rolbypassrls) {
+    throw new Error(`Unsafe DB backend role '${role.rolname}': SUPERUSER/BYPASSRLS is not allowed`);
+  }
+
+  const tablesResult = await backendPool.query(`
+    SELECT c.relname,
+           c.relrowsecurity,
+           c.relforcerowsecurity,
+           pg_get_userbyid(c.relowner) = current_user AS owned_by_backend
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
+  `, [RLS_TABLES]);
+
+  const byName = new Map(tablesResult.rows.map((row) => [row.relname, row]));
+  const missing = RLS_TABLES.filter((name) => !byName.has(name));
+  const rlsDisabled = tablesResult.rows
+    .filter((row) => !row.relrowsecurity)
+    .map((row) => row.relname);
+  const unsafeOwned = tablesResult.rows
+    .filter((row) => row.owned_by_backend && !row.relforcerowsecurity)
+    .map((row) => row.relname);
+
+  if (missing.length || rlsDisabled.length || unsafeOwned.length) {
+    throw new Error(
+      `Unsafe RLS configuration. Missing=[${missing.join(', ')}], ` +
+      `RLS disabled=[${rlsDisabled.join(', ')}], ` +
+      `backend-owned without FORCE RLS=[${unsafeOwned.join(', ')}]`
+    );
+  }
+
+  console.log(`✅ RLS validated for role '${role.rolname}' on ${RLS_TABLES.length} tables`);
 }
 
-module.exports = { adminPool, backendPool };
+module.exports = { adminPool, backendPool, validateRlsConfiguration };

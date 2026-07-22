@@ -4,12 +4,23 @@ const helmet = require('helmet');
 
 const app = express();
 
-app.set('trust proxy', 1);
+// Chỉ tin X-Forwarded-* từ proxy đáng tin cậy. Mặc định proxy phải chạy local;
+// production có load balancer riêng cần đặt TRUST_PROXY thành IP/CIDR tương ứng.
+app.set('trust proxy', process.env.TRUST_PROXY || 'loopback');
 
 // ── Security Headers ──────────────────────────────────────────────────────
 // helmet đặt các HTTP header bảo mật cơ bản:
 // X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, HSTS, v.v.
 app.use(helmet());
+
+// Production chỉ phục vụ qua HTTPS (thường TLS terminate tại reverse proxy).
+// req.secure tôn trọng X-Forwarded-Proto vì trust proxy đã được cấu hình ở trên.
+app.use((req, res, next) => {
+  if (process.env.NODE_ENV === 'production' && !req.secure) {
+    return res.status(426).json({ message: 'HTTPS is required' });
+  }
+  next();
+});
 
 // ── CORS ──────────────────────────────────────────────────────────────────
 // Fail-safe: chặt chẽ theo hướng bảo mật

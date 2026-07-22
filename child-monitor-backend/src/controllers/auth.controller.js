@@ -487,37 +487,44 @@ exports.refresh = async (req, res) => {
     return res.status(400).json({ message: 'Refresh token is required' });
   }
 
+  let dbClient;
+  let transactionOpen = false;
   try {
     const tokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
+    dbClient = await adminPool.connect();
+    await dbClient.query('BEGIN');
+    transactionOpen = true;
 
-    const result = await adminPool.query(
-      'SELECT * FROM refresh_tokens WHERE token_hash = $1 AND expires_at > NOW()',
+    // Consume token theo một thao tác atomic. Với hai request đồng thời, chỉ một
+    // transaction có thể DELETE được row và nhận quyền phát token kế tiếp.
+    const consumedToken = await dbClient.query(
+      `DELETE FROM refresh_tokens
+       WHERE token_hash = $1 AND expires_at > NOW()
+       RETURNING token_id, user_id`,
       [tokenHash]
     );
 
-    if (result.rows.length === 0) {
+    if (consumedToken.rows.length === 0) {
+      await dbClient.query('ROLLBACK');
+      transactionOpen = false;
       console.warn(`[SECURITY WARNING] Invalid or expired refresh token attempt from IP: ${req.ip}`);
       return res.status(401).json({ message: 'Invalid or expired refresh token' });
     }
 
-    const dbToken = result.rows[0];
+    const dbToken = consumedToken.rows[0];
 
-    const userResult = await adminPool.query(
+    const userResult = await dbClient.query(
       'SELECT token_version FROM users WHERE user_id = $1',
       [dbToken.user_id]
     );
 
     if (userResult.rows.length === 0) {
+      await dbClient.query('ROLLBACK');
+      transactionOpen = false;
       return res.status(401).json({ message: 'User not found' });
     }
 
     const user = userResult.rows[0];
-
-    // Token rotation: xóa token cũ
-    await adminPool.query(
-      'DELETE FROM refresh_tokens WHERE token_id = $1',
-      [dbToken.token_id]
-    );
 
     // Sinh access token mới và refresh token mới
     const jti = uuidv4();
@@ -531,18 +538,32 @@ exports.refresh = async (req, res) => {
     const newRefreshTokenHash = crypto.createHash('sha256').update(newRefreshTokenRaw).digest('hex');
     const newRefreshTokenExpires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
-    await adminPool.query(
+    await dbClient.query(
       'INSERT INTO refresh_tokens(user_id, token_hash, expires_at) VALUES($1, $2, $3)',
       [dbToken.user_id, newRefreshTokenHash, newRefreshTokenExpires]
     );
+
+    await dbClient.query('COMMIT');
+    transactionOpen = false;
 
     res.json({
       accessToken: newAccessToken,
       refreshToken: newRefreshTokenRaw
     });
   } catch (error) {
+    if (dbClient && transactionOpen) {
+      try {
+        await dbClient.query('ROLLBACK');
+      } catch (rollbackError) {
+        console.error('[CRITICAL SECURITY ALERT] Refresh rollback failed:', rollbackError);
+      }
+    }
     console.error('Refresh token error:', error);
     res.status(500).json({ message: 'Internal server error' });
+  } finally {
+    if (dbClient) {
+      dbClient.release();
+    }
   }
 };
 
