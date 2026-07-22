@@ -1,8 +1,10 @@
 import time
 import ctypes
 import logging
+import threading
 from pipe_client import PipeClient
 from app_tracker import AppTracker
+from ui_alerts import UIAlerts
 
 # Cấu hình logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -15,24 +17,52 @@ def lock_windows_session():
     except Exception as e:
         logging.error(f"Failed to lock workstation: {e}")
 
+def handle_policy_response(policy_response):
+    """Xử lý kết quả phản hồi policy từ Service (chặn hoặc đếm ngược khóa máy)."""
+    if not policy_response or not isinstance(policy_response, dict):
+        return
+
+    should_lock = policy_response.get("should_lock", False)
+    reason = policy_response.get("reason", "")
+    countdown_minutes = policy_response.get("countdown_minutes", 0)
+
+    if should_lock:
+        logging.warning(f"Lock policy triggered: {reason}")
+        if countdown_minutes > 0:
+            UIAlerts.show_countdown_warning(minutes=countdown_minutes, reason=reason)
+            time.sleep(5) # Cho phép người dùng nhìn thấy cảnh báo trước khi khóa
+        lock_windows_session()
+
+def start_ping_timer(pipe_client, interval=30):
+    """
+    Worker thread gửi PING định kỳ mỗi 30 giây để kiểm tra policy
+    bất kể người dùng có chuyển ứng dụng hay không.
+    """
+    def _ping_loop():
+        logging.info("Companion PING timer loop started (30s interval)")
+        while True:
+            try:
+                policy_response = pipe_client.send_ping()
+                handle_policy_response(policy_response)
+            except Exception as e:
+                logging.error(f"PING timer loop error: {e}")
+            time.sleep(interval)
+
+    t = threading.Thread(target=_ping_loop, daemon=True)
+    t.start()
+
 def main():
     logging.info("UI Companion started in User Session.")
     pipe_client = PipeClient()
     tracker = AppTracker(pipe_client)
 
+    # Khởi chạy luồng timer 30s PING kiểm tra policy
+    start_ping_timer(pipe_client, interval=30)
+
     while True:
         try:
             policy_response = tracker.poll()
-            
-            # Nếu nhận được phản hồi chính sách yêu cầu khóa máy
-            if policy_response and isinstance(policy_response, dict):
-                should_lock = policy_response.get("should_lock", False)
-                reason = policy_response.get("reason", "")
-                
-                if should_lock:
-                    logging.warning(f"Lock policy triggered: {reason}")
-                    lock_windows_session()
-
+            handle_policy_response(policy_response)
         except Exception as e:
             logging.error(f"Companion loop error: {e}")
 
@@ -40,3 +70,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

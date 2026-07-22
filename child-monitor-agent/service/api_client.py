@@ -144,3 +144,14 @@ class APIClient:
 
     def post(self, endpoint, data=None, timeout=10):
         return self.request("POST", endpoint, payload=data, timeout=timeout)
+
+    def get_config(self, timeout=10):
+        """Lấy thông tin cấu hình và danh sách tên miền bị chặn từ /api/agent/config."""
+        res = self.get("/api/agent/config", timeout=timeout)
+        if res and res.status_code == 200:
+            try:
+                return res.json()
+            except Exception as e:
+                logging.error(f"Error parsing json from /api/agent/config: {e}")
+        return None
+

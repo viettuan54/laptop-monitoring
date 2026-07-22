@@ -18,10 +18,11 @@ class PipeServer:
         self.enforcement_core = enforcement_core
         self.running = False
         self.client_handle = None
+        self.current_user_sid = None
         self.lock = threading.Lock()
 
-    def create_security_attributes(self):
-        """Tạo Security Attributes cho Named Pipe để bảo mật chỉ cho phép SYSTEM và Administrators truy cập."""
+    def create_security_attributes(self, user_sid=None):
+        """Tạo Security Attributes cho Named Pipe để bảo mật SYSTEM, Admins và User SID cụ thể."""
         sa = win32security.SECURITY_ATTRIBUTES()
         sa.bInheritHandle = False
         
@@ -29,23 +30,40 @@ class PipeServer:
         sd = win32security.SECURITY_DESCRIPTOR()
         sd.Initialize()
         
-        # Tạo DACL chỉ cho phép Local System và Admins
+        # Tạo DACL
         dacl = win32security.ACL()
         dacl.Initialize()
 
         # Add Full Control cho Local System & Admins
         sid_system = win32security.CreateWellKnownSid(win32security.WinLocalSystemSid)
         sid_admins = win32security.CreateWellKnownSid(win32security.WinBuiltinAdministratorsSid)
-        sid_everyone = win32security.CreateWellKnownSid(win32security.WinWorldSid)
 
         dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32file.GENERIC_ALL, sid_system)
         dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32file.GENERIC_ALL, sid_admins)
-        # Cho phép Everyone quyền đọc/ghi kết nối pipe (vì Companion chạy dưới user session)
-        dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32file.GENERIC_READ | win32file.GENERIC_WRITE, sid_everyone)
+
+        if user_sid:
+            # Cho phép User SID cụ thể của Session đang đăng nhập kết nối
+            dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32file.GENERIC_READ | win32file.GENERIC_WRITE, user_sid)
+        else:
+            # Fallback cho phép Everyone nếu chưa xác định được User SID
+            sid_everyone = win32security.CreateWellKnownSid(win32security.WinWorldSid)
+            dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32file.GENERIC_READ | win32file.GENERIC_WRITE, sid_everyone)
 
         sd.SetSecurityDescriptorDacl(1, dacl, 0)
         sa.SECURITY_DESCRIPTOR = sd
         return sa
+
+    def recreate_pipe(self, new_user_sid=None):
+        """Khởi tạo/Làm mới Pipe Instance khi có sự kiện đổi Session (Switch User)."""
+        logging.info(f"Recreating Pipe Server DACL for User SID: {new_user_sid}")
+        with self.lock:
+            self.current_user_sid = new_user_sid
+            if self.client_handle:
+                try:
+                    win32file.CloseHandle(self.client_handle)
+                except Exception:
+                    pass
+                self.client_handle = None
 
     def start(self):
         """Khởi chạy luồng Named Pipe Server."""
@@ -58,9 +76,8 @@ class PipeServer:
         self.running = False
 
     def _server_loop(self):
-        sa = self.create_security_attributes()
-
         while self.running:
+            sa = self.create_security_attributes(user_sid=self.current_user_sid)
             try:
                 # Tạo Named Pipe Server
                 pipe_handle = win32pipe.CreateNamedPipe(
@@ -128,7 +145,11 @@ class PipeServer:
                     # Cộng dồn thời gian dùng máy trong ngày
                     self.offline_queue.add_daily_usage(duration_seconds)
 
-            # Đổi lại: Kiểm tra trạng thái policy hiện tại để phản hồi cho Companion
+            elif action == "PING":
+                # Action PING chỉ kiểm tra chính sách mà không ghi nhận sự kiện theo dõi ứng dụng mới
+                pass
+
+            # Kiểm tra trạng thái policy hiện tại để phản hồi cho Companion
             should_lock, reason, remaining_seconds = self.enforcement_core.check_policy_status()
             response_payload = {
                 "should_lock": should_lock,

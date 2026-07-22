@@ -1,7 +1,9 @@
+import time
 import json
 import logging
 import win32file
 import win32pipe
+import pywintypes
 
 # Cấu hình logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -23,30 +25,47 @@ class PipeClient:
         }
         return self._send_and_receive(payload)
 
-    def _send_and_receive(self, payload_dict):
-        try:
-            # Mở kết nối tới Named Pipe
-            handle = win32file.CreateFile(
-                self.PIPE_NAME,
-                win32file.GENERIC_READ | win32file.GENERIC_WRITE,
-                0, None,
-                win32file.OPEN_EXISTING,
-                0, None
-            )
+    def send_ping(self):
+        """Gửi định kỳ PING lên Service để kiểm tra chính sách mà không làm ghi log app mới."""
+        payload = {
+            "action": "PING"
+        }
+        return self._send_and_receive(payload)
 
-            # Gửi dữ liệu JSON
-            message_bytes = json.dumps(payload_dict).encode('utf-8')
-            win32file.WriteFile(handle, message_bytes)
+    def _send_and_receive(self, payload_dict, max_retries=3):
+        """Mở kết nối pipe có hỗ trợ retry ngắn (100-300ms) để tránh xung đột tranh chấp."""
+        for attempt in range(1, max_retries + 1):
+            try:
+                # Mở kết nối tới Named Pipe
+                handle = win32file.CreateFile(
+                    self.PIPE_NAME,
+                    win32file.GENERIC_READ | win32file.GENERIC_WRITE,
+                    0, None,
+                    win32file.OPEN_EXISTING,
+                    0, None
+                )
 
-            # Đọc dữ liệu phản hồi từ Service
-            result, data = win32file.ReadFile(handle, 65536)
-            win32file.CloseHandle(handle)
+                # Gửi dữ liệu JSON
+                message_bytes = json.dumps(payload_dict).encode('utf-8')
+                win32file.WriteFile(handle, message_bytes)
 
-            if result == 0 and data:
-                return json.loads(data.decode('utf-8'))
+                # Đọc dữ liệu phản hồi từ Service
+                result, data = win32file.ReadFile(handle, 65536)
+                win32file.CloseHandle(handle)
 
-        except Exception as e:
-            # Có thể do Core Service chưa khởi chạy pipe
-            pass
+                if result == 0 and data:
+                    return json.loads(data.decode('utf-8'))
+
+            except pywintypes.error as e:
+                # Nếu pipe đang bận (ERROR_PIPE_BUSY = 231), thử WaitNamedPipe
+                if attempt < max_retries:
+                    try:
+                        win32pipe.WaitNamedPipe(self.PIPE_NAME, 300)
+                    except Exception:
+                        time.sleep(0.15)
+            except Exception as e:
+                if attempt < max_retries:
+                    time.sleep(0.15)
 
         return None
+

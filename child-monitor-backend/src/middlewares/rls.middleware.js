@@ -44,15 +44,17 @@ module.exports = async (req, res, next) => {
   }
 
   let released = false;
-  const releaseClient = async () => {
+  const releaseClient = async (success) => {
     if (!released) {
       released = true;
       try {
-        // ROLLBACK để reset transaction-scoped set_config và giải phóng lock
-        // Không cần RESET app.current_user_id vì transaction-scoped tự xóa
-        await client.query('ROLLBACK');
+        if (success) {
+          await client.query('COMMIT');
+        } else {
+          await client.query('ROLLBACK');
+        }
       } catch (err) {
-        console.error('Error rolling back RLS transaction:', err.message);
+        console.error('[CRITICAL] Error releasing RLS transaction client:', err.message);
       } finally {
         client.release();
       }
@@ -60,8 +62,8 @@ module.exports = async (req, res, next) => {
   };
 
   // Đăng ký giải phóng connection khi request kết thúc hoặc bị ngắt kết nối giữa chừng
-  res.on('finish', releaseClient);
-  res.on('close', releaseClient);
+  res.on('finish', () => releaseClient(res.statusCode < 400));
+  res.on('close', () => releaseClient(false));
 
   next();
 };
