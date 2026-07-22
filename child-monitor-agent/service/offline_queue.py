@@ -76,21 +76,24 @@ class OfflineQueue:
             except Exception as e:
                 logging.error(f"Failed to secure SQLite file permissions: {e}")
 
-    def enqueue_app_log(self, app_name, start_time, end_time=None, duration_seconds=None, category='unknown'):
+    def enqueue_app_log(self, app_name, start_time, end_time=None, duration_seconds=None,
+                        category='unknown', client_record_id=None):
         """Thêm log sử dụng app vào SQLite local và tự sinh client_record_id."""
-        client_record_id = str(uuid.uuid4())
+        client_record_id = client_record_id or str(uuid.uuid4())
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                INSERT INTO app_logs (client_record_id, app_name, category, start_time, end_time, duration_seconds, synced)
+                INSERT OR IGNORE INTO app_logs
+                    (client_record_id, app_name, category, start_time, end_time, duration_seconds, synced)
                 VALUES (?, ?, ?, ?, ?, ?, 0)
                 """, (client_record_id, app_name, category, start_time, end_time, duration_seconds))
+                inserted = cursor.rowcount == 1
                 conn.commit()
-            return client_record_id
+            return client_record_id, inserted
         except Exception as e:
             logging.error(f"Failed to enqueue app log: {e}")
-            return None
+            return None, False
 
     def enqueue_web_log(self, url, domain, visit_time, duration_seconds=None, page_title=None, category='unknown'):
         """Thêm log truy cập website vào SQLite local và tự sinh client_record_id."""

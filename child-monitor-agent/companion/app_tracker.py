@@ -1,5 +1,6 @@
 import time
 import logging
+import uuid
 from datetime import datetime
 import win32gui
 import win32process
@@ -13,7 +14,47 @@ class AppTracker:
         self.pipe_client = pipe_client
         self.current_app = None
         self.app_start_time = None
+        self.app_start_monotonic = None
         self.min_duration_seconds = 3 # Ngưỡng lọc nhiễu 3 giây
+        self.flush_interval_seconds = 30
+        self.pending_segments = []
+
+    def _queue_current_segment(self, end_time, end_monotonic):
+        """Đóng lát thời gian hiện tại và đưa vào hàng đợi gửi IPC."""
+        if not self.current_app or self.app_start_monotonic is None:
+            return
+
+        duration = int(end_monotonic - self.app_start_monotonic)
+        if duration >= self.min_duration_seconds:
+            self.pending_segments.append({
+                "client_record_id": str(uuid.uuid4()),
+                "app_name": self.current_app,
+                "start_time": self.app_start_time.isoformat() + "Z",
+                "end_time": end_time.isoformat() + "Z",
+                "duration_seconds": duration,
+            })
+
+    def _send_pending_segments(self):
+        """Gửi theo thứ tự; giữ nguyên segment đầu tiên nếu Service chưa ACK."""
+        last_response = None
+        while self.pending_segments:
+            segment = self.pending_segments[0]
+            response = self.pipe_client.send_app_tracking(**segment)
+            if response is None:
+                break
+            self.pending_segments.pop(0)
+            last_response = response
+        return last_response
+
+    def flush(self):
+        """Flush lát hiện tại, dùng khi companion chuẩn bị thoát."""
+        now = datetime.now()
+        now_monotonic = time.monotonic()
+        self._queue_current_segment(now, now_monotonic)
+        self.current_app = None
+        self.app_start_time = None
+        self.app_start_monotonic = None
+        return self._send_pending_segments()
 
     @staticmethod
     def get_foreground_app_name():
@@ -36,35 +77,24 @@ class AppTracker:
         """Hàm kiểm tra cửa sổ active định kỳ."""
         app_name = self.get_foreground_app_name()
         now = datetime.now()
+        now_monotonic = time.monotonic()
 
         if not app_name:
-            return None
+            return self._send_pending_segments()
 
         if self.current_app is None:
             self.current_app = app_name
             self.app_start_time = now
-            return None
+            self.app_start_monotonic = now_monotonic
+            return self._send_pending_segments()
 
-        # Nếu chuyển sang ứng dụng khác
-        if app_name != self.current_app:
-            duration = int((now - self.app_start_time).total_seconds())
-
-            prev_app = self.current_app
-            start_iso = self.app_start_time.isoformat() + "Z"
-            end_iso = now.isoformat() + "Z"
-
-            # Đổi sang app mới
+        elapsed = now_monotonic - self.app_start_monotonic
+        # Đóng lát khi đổi app hoặc sau mỗi khoảng flush. Nhờ vậy một app chạy
+        # liên tục nhiều giờ vẫn được cộng daily_usage đều đặn.
+        if app_name != self.current_app or elapsed >= self.flush_interval_seconds:
+            self._queue_current_segment(now, now_monotonic)
             self.current_app = app_name
             self.app_start_time = now
+            self.app_start_monotonic = now_monotonic
 
-            # Nếu thời gian dùng app trước >= 3s -> gửi log lên Service qua Pipe
-            if duration >= self.min_duration_seconds:
-                response = self.pipe_client.send_app_tracking(
-                    app_name=prev_app,
-                    start_time=start_iso,
-                    end_time=end_iso,
-                    duration_seconds=duration
-                )
-                return response
-
-        return None
+        return self._send_pending_segments()

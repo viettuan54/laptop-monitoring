@@ -133,18 +133,23 @@ class PipeServer:
                 start_time = msg.get("start_time")
                 end_time = msg.get("end_time")
                 duration_seconds = msg.get("duration_seconds", 0)
+                client_record_id = msg.get("client_record_id")
 
                 if app_name and start_time and duration_seconds > 0:
                     # Ghi vào SQLite offline queue
-                    self.offline_queue.enqueue_app_log(
+                    persisted_id, inserted = self.offline_queue.enqueue_app_log(
                         app_name=app_name,
                         start_time=start_time,
                         end_time=end_time,
                         duration_seconds=duration_seconds,
-                        category="unknown"
+                        category="unknown",
+                        client_record_id=client_record_id
                     )
-                    # Cộng dồn thời gian dùng máy trong ngày
-                    self.offline_queue.add_daily_usage(duration_seconds)
+                    if not persisted_id:
+                        raise RuntimeError("Failed to persist app tracking segment")
+                    # Retry cùng client_record_id không được cộng thời gian lần hai.
+                    if inserted:
+                        self.offline_queue.add_daily_usage(duration_seconds)
 
             elif action == "PING":
                 # Action PING chỉ kiểm tra chính sách mà không ghi nhận sự kiện theo dõi ứng dụng mới

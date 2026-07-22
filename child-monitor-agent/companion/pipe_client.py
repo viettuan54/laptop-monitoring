@@ -14,7 +14,7 @@ class PipeClient:
     def __init__(self):
         pass
 
-    def send_app_tracking(self, app_name, start_time, end_time, duration_seconds):
+    def send_app_tracking(self, app_name, start_time, end_time, duration_seconds, client_record_id=None):
         """Gửi log theo dõi ứng dụng lên Service và nhận về phản hồi chính sách khóa máy."""
         payload = {
             "action": "TRACK_APP",
@@ -23,6 +23,8 @@ class PipeClient:
             "end_time": end_time,
             "duration_seconds": duration_seconds
         }
+        if client_record_id:
+            payload["client_record_id"] = client_record_id
         return self._send_and_receive(payload)
 
     def send_ping(self):
@@ -68,4 +70,3 @@ class PipeClient:
                     time.sleep(0.15)
 
         return None
-

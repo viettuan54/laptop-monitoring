@@ -59,15 +59,20 @@ def main():
     # Khởi chạy luồng timer 30s PING kiểm tra policy
     start_ping_timer(pipe_client, interval=30)
 
-    while True:
-        try:
-            policy_response = tracker.poll()
-            handle_policy_response(policy_response)
-        except Exception as e:
-            logging.error(f"Companion loop error: {e}")
+    try:
+        while True:
+            try:
+                policy_response = tracker.poll()
+                handle_policy_response(policy_response)
+            except Exception as e:
+                logging.error(f"Companion loop error: {e}")
 
-        time.sleep(3)
+            time.sleep(3)
+    finally:
+        try:
+            handle_policy_response(tracker.flush())
+        except Exception as e:
+            logging.error(f"Failed to flush app usage during shutdown: {e}")
 
 if __name__ == "__main__":
     main()
-
