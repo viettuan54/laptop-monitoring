@@ -153,6 +153,16 @@ class ChildMonitorService(ServiceBaseClass):
         res = self.api_client.post("/api/agent/heartbeat", data={})
         if res and res.status_code == 200:
             logging.info("Heartbeat acknowledged by backend.")
+            try:
+                payload = res.json()
+                config = payload.get("config")
+                if isinstance(config, dict):
+                    # Heartbeat is the fastest policy channel (60s). Preserve the
+                    # blacklist cached by the less frequent full config refresh.
+                    self.enforcement_core.save_settings_cache(config)
+                    logging.info("Applied policy config received with heartbeat.")
+            except (ValueError, AttributeError) as e:
+                logging.warning(f"Heartbeat returned invalid JSON: {e}")
         else:
             status = res.status_code if res else "No Response"
             logging.warning(f"Heartbeat response status: {status}")

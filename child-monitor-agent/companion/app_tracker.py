@@ -29,8 +29,10 @@ class AppTracker:
             self.pending_segments.append({
                 "client_record_id": str(uuid.uuid4()),
                 "app_name": self.current_app,
-                "start_time": self.app_start_time.isoformat() + "Z",
-                "end_time": end_time.isoformat() + "Z",
+                # datetime.now() is local time. Include its real UTC offset instead
+                # of appending "Z" (which would incorrectly claim the value is UTC).
+                "start_time": self.app_start_time.astimezone().isoformat(),
+                "end_time": end_time.astimezone().isoformat(),
                 "duration_seconds": duration,
             })
 

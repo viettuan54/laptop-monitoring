@@ -3,6 +3,7 @@ import sqlite3
 import uuid
 import time
 import logging
+import subprocess
 from datetime import datetime
 
 # Cấu hình logging
@@ -82,8 +83,21 @@ class OfflineQueue:
             try:
                 # Gỡ bỏ kế thừa quyền (inheritance) và cấp quyền full cho SYSTEM / Administrators
                 # Quyền đọc/ghi cho người dùng thường (Standard User) sẽ bị từ chối
-                cmd = f'icacls "{self.db_path}" /inheritance:r /grant:r SYSTEM:(F) /grant:r Administrators:(F)'
-                os.system(cmd)
+                result = subprocess.run(
+                    [
+                        "icacls", self.db_path, "/inheritance:r",
+                        "/grant:r", "*S-1-5-18:(F)",
+                        "/grant:r", "*S-1-5-32-544:(F)",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        result.stderr.strip() or result.stdout.strip() or "icacls failed"
+                    )
                 logging.info(f"Secured SQLite database file permission: {self.db_path}")
             except Exception as e:
                 logging.error(f"Failed to secure SQLite file permissions: {e}")

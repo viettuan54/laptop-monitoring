@@ -69,7 +69,9 @@ module.exports = async (req, res, next) => {
 
     const dbUser = userResult.rows[0];
     // Kiểm tra token_version để vô hiệu hóa phiên khi mật khẩu thay đổi
-    if (decoded.token_version !== undefined && decoded.token_version !== dbUser.token_version) {
+    // Fail closed for legacy/malformed tokens without token_version. Otherwise
+    // such tokens would survive password changes until their normal expiry.
+    if (decoded.token_version === undefined || decoded.token_version !== dbUser.token_version) {
       return res.status(401).json({ message: 'Token has been revoked due to password change' });
     }
 

@@ -57,13 +57,8 @@ exports.triggerAnalysis = async (req, res) => {
   const { device_id } = req.params;
 
   try {
-    // Kiểm tra xem thiết bị có tồn tại và thuộc quyền sở hữu của phụ huynh không (thông qua RLS trên bảng devices)
-    const deviceCheck = await req.db.query('SELECT device_id FROM devices WHERE device_id = $1', [device_id]);
-    if (deviceCheck.rows.length === 0) {
-      return res.status(404).json({ message: 'Device not found or access denied' });
-    }
-
-    // Chạy phân tích hoạt động sử dụng Gemini AI
+    // Ownership đã được requireOwnedDevice kiểm tra và RLS connection đã được
+    // giải phóng trước khi bắt đầu tác vụ mạng có thể kéo dài này.
     const result = await aiService.analyzeDeviceActivity(device_id);
     res.json({
       message: 'AI analysis completed successfully',
@@ -80,12 +75,8 @@ exports.getSummaryReport = async (req, res) => {
   const { period } = req.query; // 'daily' hoặc 'weekly'
 
   try {
-    // Kiểm tra quyền sở hữu thiết bị
-    const deviceCheck = await req.db.query('SELECT device_id FROM devices WHERE device_id = $1', [device_id]);
-    if (deviceCheck.rows.length === 0) {
-      return res.status(404).json({ message: 'Device not found or access denied' });
-    }
-
+    // Ownership đã được requireOwnedDevice kiểm tra và RLS connection đã được
+    // giải phóng trước khi gọi Gemini.
     const reportPeriod = period === 'daily' ? 'daily' : 'weekly'; // mặc định là weekly
     const summary = await aiService.generateSummaryReport(device_id, reportPeriod);
 

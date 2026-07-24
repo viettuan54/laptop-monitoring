@@ -61,6 +61,11 @@ module.exports = async (req, res, next) => {
     }
   };
 
+  // Cho phép middleware/controller kết thúc RLS transaction sớm khi phần còn
+  // lại của request không cần req.db (ví dụ: gọi API AI qua mạng ngoài).
+  // Hàm có cơ chế idempotent nên các listener finish/close phía dưới vẫn an toàn.
+  req.releaseRls = releaseClient;
+
   // Đăng ký giải phóng connection khi request kết thúc hoặc bị ngắt kết nối giữa chừng
   res.on('finish', () => releaseClient(res.statusCode < 400));
   res.on('close', () => releaseClient(false));

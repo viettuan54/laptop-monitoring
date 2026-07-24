@@ -44,6 +44,7 @@ class EnforcementCore:
     def save_settings_cache(self, config_data, blacklisted_domains=None):
         """Lưu cài đặt settings và danh sách blacklist vào file cache cục bộ."""
         try:
+            blacklist_was_refreshed = blacklisted_domains is not None
             cache_data = config_data.copy() if config_data else {}
             if blacklisted_domains is not None:
                 cache_data["blacklisted_domains"] = blacklisted_domains
@@ -54,8 +55,10 @@ class EnforcementCore:
             with open(self.settings_cache_path, "w", encoding="utf-8") as f:
                 json.dump(cache_data, f, indent=2)
 
-            # Đồng thời cập nhật file Hosts hệ thống với danh sách domain cấm mới
-            self.update_hosts_file(cache_data.get("blacklisted_domains", []))
+            # Heartbeat only refreshes policy fields. Rewrite hosts/flush DNS only
+            # when a full config response explicitly refreshes the blacklist.
+            if blacklist_was_refreshed:
+                self.update_hosts_file(cache_data.get("blacklisted_domains", []))
         except Exception as e:
             logging.error(f"Failed to save settings cache: {e}")
 
@@ -132,7 +135,13 @@ class EnforcementCore:
             start_t = datetime.strptime(start_time_str, "%H:%M:%S").time()
             end_t = datetime.strptime(end_time_str, "%H:%M:%S").time()
 
-            if not (start_t <= cur_t <= end_t):
+            # A range such as 22:00-06:00 crosses midnight and must use OR.
+            if start_t <= end_t:
+                within_allowed_hours = start_t <= cur_t <= end_t
+            else:
+                within_allowed_hours = cur_t >= start_t or cur_t <= end_t
+
+            if not within_allowed_hours:
                 return True, f"Outside allowed usage hours ({start_time_str} - {end_time_str}).", 0
         except Exception as e:
             logging.error(f"Time parsing error: {e}")
