@@ -295,11 +295,13 @@ exports.logAppBatch = async (req, res) => {
          unnest($1::text[]),
          $2::int,
          unnest($3::text[]),
-         unnest($4::text[]),
+         unnest($4::app_category[]),
          unnest($5::timestamptz[]),
          unnest($6::timestamptz[]),
          unnest($7::int[])
-       ON CONFLICT (client_record_id) DO NOTHING`,
+       ON CONFLICT (client_record_id)
+       WHERE client_record_id IS NOT NULL
+       DO NOTHING`,
       [clientIds, device_id, appNames, categories, startTimes, endTimes, durations]
     );
 
@@ -422,11 +424,13 @@ exports.logWebBatch = async (req, res) => {
          $2::int,
          unnest($3::text[]),
          unnest($4::text[]),
-         unnest($5::text[]),
+         unnest($5::web_category[]),
          unnest($6::timestamptz[]),
          unnest($7::int[]),
          unnest($8::text[])
-       ON CONFLICT (client_record_id) DO NOTHING`,
+       ON CONFLICT (client_record_id)
+       WHERE client_record_id IS NOT NULL
+       DO NOTHING`,
       [clientIds, device_id, urls, domains, categories, visitTimes, durations, pageTitles]
     );
 

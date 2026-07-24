@@ -1,4 +1,4 @@
-const rateLimit = require('express-rate-limit');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const crypto = require('crypto');
 
 /**
@@ -92,7 +92,7 @@ const agentLimiter = rateLimit({
         return crypto.createHash('sha256').update(secret).digest('hex');
       }
     }
-    return req.ip; // Fallback về IP nếu thiếu/sai định dạng secret
+    return ipKeyGenerator(req.ip); // Chuẩn hóa IPv4/IPv6 khi fallback theo IP
   },
   // Tắt cảnh báo về X-Forwarded-For vì keyGenerator đã dùng device secret (không phụ thuộc IP)
   validate: { xForwardedForHeader: false },

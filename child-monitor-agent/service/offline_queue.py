@@ -8,8 +8,19 @@ from datetime import datetime
 # Cấu hình logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
+
+class ClosingSQLiteConnection(sqlite3.Connection):
+    """sqlite3 context manager có commit/rollback nhưng mặc định không close."""
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 class OfflineQueue:
-    def __init__(self, db_path=None, api_client=None):
+    def __init__(self, db_path=None, api_client=None, secure_file=True):
         if db_path is None:
             base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             db_path = os.path.join(base_dir, "db", "local.db")
@@ -17,10 +28,11 @@ class OfflineQueue:
         self.db_path = db_path
         self.api_client = api_client
         self.init_db()
-        self.secure_db_file()
+        if secure_file:
+            self.secure_db_file()
 
     def get_connection(self):
-        return sqlite3.connect(self.db_path)
+        return sqlite3.connect(self.db_path, factory=ClosingSQLiteConnection)
 
     def init_db(self):
         """Khởi tạo các bảng SQLite local nếu chưa tồn tại."""
