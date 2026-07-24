@@ -1,4 +1,8 @@
 const { adminPool } = require('../config/db');
+const {
+  validateDurationSeconds,
+  MAX_LOG_DURATION_SECONDS,
+} = require('../utils/validation');
 
 // ────────────────────────────────────────────────────────────────
 // Hằng số dùng chung cho 2 hàm batch
@@ -29,6 +33,11 @@ exports.logAppUsage = async (req, res) => {
   if (category && !validCategories.includes(category)) {
     return res.status(400).json({ message: `Invalid category. Allowed: ${validCategories.join(', ')}` });
   }
+  if (!validateDurationSeconds(duration_seconds)) {
+    return res.status(400).json({
+      message: `duration_seconds must be an integer between 0 and ${MAX_LOG_DURATION_SECONDS}`,
+    });
+  }
 
   try {
     // Dùng adminPool vì không có RLS context từ device (device secret ≠ user context)
@@ -36,7 +45,7 @@ exports.logAppUsage = async (req, res) => {
     await adminPool.query(
       `INSERT INTO app_usage(device_id, app_name, category, start_time, end_time, duration_seconds)
        VALUES($1,$2,$3,$4,$5,$6)`,
-      [device_id, app_name, category || 'unknown', start_time, end_time || null, duration_seconds || null]
+      [device_id, app_name, category || 'unknown', start_time, end_time || null, duration_seconds ?? null]
     );
     res.status(201).json({ message: 'App usage logged' });
   } catch (error) {
@@ -74,12 +83,17 @@ exports.logWebsite = async (req, res) => {
   if (category && !validCategories.includes(category)) {
     return res.status(400).json({ message: `Invalid category. Allowed: ${validCategories.join(', ')}` });
   }
+  if (!validateDurationSeconds(duration_seconds)) {
+    return res.status(400).json({
+      message: `duration_seconds must be an integer between 0 and ${MAX_LOG_DURATION_SECONDS}`,
+    });
+  }
 
   try {
     await adminPool.query(
       `INSERT INTO website_logs(device_id, url, domain, category, visit_time, duration_seconds, page_title)
        VALUES($1,$2,$3,$4,$5,$6,$7)`,
-      [device_id, url, domain || null, category || 'unknown', visit_time, duration_seconds || null, page_title || null]
+      [device_id, url, domain || null, category || 'unknown', visit_time, duration_seconds ?? null, page_title || null]
     );
     res.status(201).json({ message: 'Website log saved' });
   } catch (error) {
@@ -257,6 +271,12 @@ exports.logAppBatch = async (req, res) => {
       skippedReasons.push(`${idx} invalid category '${r.category}'`);
       continue;
     }
+    if (!validateDurationSeconds(r.duration_seconds)) {
+      skippedReasons.push(
+        `${idx} duration_seconds must be an integer between 0 and ${MAX_LOG_DURATION_SECONDS}`
+      );
+      continue;
+    }
 
     validRecords.push({
       client_record_id: r.client_record_id.trim().substring(0, 64),
@@ -264,7 +284,7 @@ exports.logAppBatch = async (req, res) => {
       category:         r.category || 'unknown',
       start_time:       r.start_time,
       end_time:         r.end_time   || null,
-      duration_seconds: Number.isFinite(r.duration_seconds) ? Math.floor(r.duration_seconds) : null,
+      duration_seconds: r.duration_seconds ?? null,
     });
   }
 
@@ -386,6 +406,12 @@ exports.logWebBatch = async (req, res) => {
       skippedReasons.push(`${idx} invalid category '${r.category}'`);
       continue;
     }
+    if (!validateDurationSeconds(r.duration_seconds)) {
+      skippedReasons.push(
+        `${idx} duration_seconds must be an integer between 0 and ${MAX_LOG_DURATION_SECONDS}`
+      );
+      continue;
+    }
 
     validRecords.push({
       client_record_id: r.client_record_id.trim().substring(0, 64),
@@ -393,7 +419,7 @@ exports.logWebBatch = async (req, res) => {
       domain:           r.domain      ? r.domain.trim().substring(0, 200)    : null,
       category:         r.category    || 'unknown',
       visit_time:       r.visit_time,
-      duration_seconds: Number.isFinite(r.duration_seconds) ? Math.floor(r.duration_seconds) : null,
+      duration_seconds: r.duration_seconds ?? null,
       page_title:       r.page_title  ? r.page_title.trim().substring(0, 500) : null,
     });
   }

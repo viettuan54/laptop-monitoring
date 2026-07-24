@@ -22,6 +22,26 @@ function validatePassword(password) {
   return password.length >= minLength && password.length <= maxLength && hasUpperCase && hasDigit && hasSpecial;
 }
 
+const MAX_LOG_DURATION_SECONDS = 24 * 60 * 60;
+
+/**
+ * duration_seconds là tùy chọn, nhưng nếu có phải là số nguyên trong phạm vi
+ * một ngày. Không ép kiểu chuỗi để tránh dữ liệu mơ hồ từ client.
+ */
+function validateDurationSeconds(value) {
+  return value === undefined
+    || value === null
+    || (
+      typeof value === 'number'
+      && Number.isFinite(value)
+      && Number.isInteger(value)
+      && value >= 0
+      && value <= MAX_LOG_DURATION_SECONDS
+    );
+}
+
 module.exports = {
   validatePassword,
+  validateDurationSeconds,
+  MAX_LOG_DURATION_SECONDS,
 };
