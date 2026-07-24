@@ -1,4 +1,5 @@
 const { adminPool } = require('../config/db');
+const { normalizeDomain } = require('../utils/domain');
 
 /**
  * GET /api/admin/users
@@ -148,19 +149,9 @@ exports.addBlacklist = async (req, res) => {
     return res.status(400).json({ message: 'domain is required' });
   }
 
-  // Chuẩn hóa domain: bỏ protocol và trailing slash
-  const normalizedDomain = domain.trim()
-    .replace(/^https?:\/\//i, '')
-    .replace(/^www\./i, '')
-    .replace(/\/.*$/, '')
-    .toLowerCase();
-
-  if (!normalizedDomain || normalizedDomain.length < 3) {
+  const normalizedDomain = normalizeDomain(domain);
+  if (!normalizedDomain) {
     return res.status(400).json({ message: 'Invalid domain format' });
-  }
-
-  if (normalizedDomain.length > 200) {
-    return res.status(400).json({ message: 'Domain cannot exceed 200 characters' });
   }
 
   if (reason && reason.length > 500) {

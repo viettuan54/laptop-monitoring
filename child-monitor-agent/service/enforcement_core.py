@@ -3,6 +3,7 @@ import sys
 import json
 import logging
 import threading
+import re
 from datetime import datetime
 
 # Cấu hình logging
@@ -11,6 +12,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 class EnforcementCore:
     HOSTS_MARKER_START = "# === LAPTOP-MONITOR START ==="
     HOSTS_MARKER_END = "# === LAPTOP-MONITOR END ==="
+    DOMAIN_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
     def __init__(self, offline_queue, config_dir=None):
         self.offline_queue = offline_queue
@@ -70,6 +72,16 @@ class EnforcementCore:
                     logging.error(f"Hosts file not found at {self.hosts_path}")
                     return
 
+                safe_domains = []
+                seen_domains = set()
+                for domain in blacklisted_domains:
+                    clean_domain = self.normalize_domain(domain)
+                    if clean_domain and clean_domain not in seen_domains:
+                        safe_domains.append(clean_domain)
+                        seen_domains.add(clean_domain)
+                    elif not clean_domain:
+                        logging.warning("Ignored invalid blacklist domain received from backend.")
+
                 # Đọc nội dung file hosts hiện tại
                 with open(self.hosts_path, "r", encoding="utf-8", errors="ignore") as f:
                     lines = f.readlines()
@@ -78,24 +90,22 @@ class EnforcementCore:
                 new_lines = []
                 inside_block = False
                 for line in lines:
-                    if self.HOSTS_MARKER_START in line:
+                    if line.strip() == self.HOSTS_MARKER_START:
                         inside_block = True
                         continue
-                    if self.HOSTS_MARKER_END in line:
+                    if line.strip() == self.HOSTS_MARKER_END:
                         inside_block = False
                         continue
                     if not inside_block:
                         new_lines.append(line)
 
                 # Tạo khối nội dung chặn mới nếu có domain cấm
-                if blacklisted_domains:
+                if safe_domains:
                     new_lines.append(f"\n{self.HOSTS_MARKER_START}\n")
-                    for domain in blacklisted_domains:
-                        clean_domain = domain.strip().lower()
-                        if clean_domain:
-                            new_lines.append(f"127.0.0.1 {clean_domain}\n")
-                            if not clean_domain.startswith("www."):
-                                new_lines.append(f"127.0.0.1 www.{clean_domain}\n")
+                    for clean_domain in safe_domains:
+                        new_lines.append(f"127.0.0.1 {clean_domain}\n")
+                        if not clean_domain.startswith("www."):
+                            new_lines.append(f"127.0.0.1 www.{clean_domain}\n")
                     new_lines.append(f"{self.HOSTS_MARKER_END}\n")
 
                 # Ghi lại file Hosts
@@ -104,9 +114,36 @@ class EnforcementCore:
 
                 # Làm mới DNS cache của Windows
                 os.system("ipconfig /flushdns > nul")
-                logging.info(f"Updated Windows Hosts file with {len(blacklisted_domains)} blacklisted domains.")
+                logging.info(f"Updated Windows Hosts file with {len(safe_domains)} valid blacklisted domains.")
             except Exception as e:
                 logging.error(f"Failed to update Hosts file (Check admin rights): {e}")
+
+    @classmethod
+    def normalize_domain(cls, domain):
+        """Trả về hostname ASCII an toàn để ghi hosts, hoặc None nếu không hợp lệ."""
+        if not isinstance(domain, str) or not domain:
+            return None
+        if any(ord(char) <= 32 or ord(char) == 127 for char in domain):
+            return None
+        if "#" in domain or "\\" in domain:
+            return None
+
+        candidate = domain.lower()
+        if candidate.startswith("www."):
+            candidate = candidate[4:]
+        candidate = candidate[:-1] if candidate.endswith(".") else candidate
+
+        try:
+            ascii_domain = candidate.encode("idna").decode("ascii")
+        except (UnicodeError, ValueError):
+            return None
+
+        if len(ascii_domain) < 3 or len(ascii_domain) > 200:
+            return None
+        labels = ascii_domain.split(".")
+        if len(labels) < 2 or any(not cls.DOMAIN_LABEL_RE.fullmatch(label) for label in labels):
+            return None
+        return ascii_domain
 
     def check_policy_status(self):
         """
