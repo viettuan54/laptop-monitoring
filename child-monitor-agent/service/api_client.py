@@ -10,6 +10,8 @@ from urllib.parse import urlparse
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 class APIClient:
+    CRYPTPROTECT_LOCAL_MACHINE = 0x4
+
     def __init__(self, config_path=None):
         if config_path is None:
             base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -28,7 +30,17 @@ class APIClient:
         """Mã hóa chuỗi secret bằng Windows DPAPI và trả về chuỗi Base64."""
         if not plain_secret:
             return ""
-        encrypted_bytes = win32crypt.CryptProtectData(plain_secret.encode('utf-8'), None, None, None, None, 0)
+        # Agent chạy dưới LocalSystem nhưng provisioning chạy dưới tài khoản
+        # quản trị. Machine-scope cho phép Service giải mã; ACL của file config
+        # ngăn người dùng thường đọc ciphertext.
+        encrypted_bytes = win32crypt.CryptProtectData(
+            plain_secret.encode('utf-8'),
+            None,
+            None,
+            None,
+            None,
+            APIClient.CRYPTPROTECT_LOCAL_MACHINE,
+        )
         return base64.b64encode(encrypted_bytes).decode('utf-8')
 
     @staticmethod

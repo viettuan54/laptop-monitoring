@@ -63,7 +63,7 @@ class Watchdog:
 
             startup_info = win32process.STARTUPINFO()
             startup_info.dwFlags = win32process.STARTF_USESHOWWINDOW
-            startup_info.wShowWindow = win32con.SW_SHOW
+            startup_info.wShowWindow = win32con.SW_HIDE
 
             # Duplicate Token với đầy đủ quyền để spawn tiến trình
             primary_token = win32security.DuplicateTokenEx(
@@ -80,7 +80,7 @@ class Watchdog:
                 None,
                 None,
                 False,
-                win32process.CREATE_NEW_CONSOLE | win32process.CREATE_UNICODE_ENVIRONMENT,
+                win32process.CREATE_NO_WINDOW | win32process.CREATE_UNICODE_ENVIRONMENT,
                 env,
                 os.path.dirname(companion_script),
                 startup_info
