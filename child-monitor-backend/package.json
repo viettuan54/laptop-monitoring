@@ -4,6 +4,9 @@
   "description": "Backend for child laptop monitoring system",
   "main": "server.js",
   "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "nodemon server.js",
     "test:unit": "node --test test/*.middleware.test.js test/*.unit.test.js",
@@ -11,7 +14,7 @@
     "test:integration": "node --test test/*.integration.test.js"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
+    "@google/genai": "^2.13.0",
     "bcrypt": "^6.0.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",

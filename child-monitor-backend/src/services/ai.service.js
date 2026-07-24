@@ -1,13 +1,15 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleGenAI } = require('@google/genai');
 const { adminPool } = require('../config/db');
 const { sendPushNotification } = require('./notification.service');
+const { getGeminiModel } = require('../utils/aiConfig');
 require('dotenv').config();
 
 // Khởi tạo Gemini API nếu có API Key
 const apiKey = process.env.GEMINI_API_KEY;
+const modelId = getGeminiModel();
 let ai = null;
 if (apiKey) {
-  ai = new GoogleGenerativeAI(apiKey);
+  ai = new GoogleGenAI({ apiKey });
 }
 
 /**
@@ -104,15 +106,18 @@ Cấu trúc JSON yêu cầu:
   `;
 
   // 4. Gọi Gemini API yêu cầu Structured JSON
-  const model = ai.getGenerativeModel({ model: 'gemini-2.5-flash' });
-  const aiResponse = await model.generateContent({
+  const aiResponse = await ai.models.generateContent({
+    model: modelId,
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    generationConfig: {
+    config: {
       responseMimeType: 'application/json',
     },
   });
 
-  const responseText = aiResponse.response.text();
+  const responseText = aiResponse.text;
+  if (!responseText) {
+    throw new Error('AI response did not contain text');
+  }
   let analysisData;
   try {
     analysisData = JSON.parse(responseText);
@@ -311,15 +316,18 @@ Ví dụ định dạng mong muốn:
 Chỉ trả về đoạn văn bản tóm tắt, không thêm bất kỳ định dạng (như Markdown, JSON) hay lời chào hỏi nào khác.
 `;
 
-  const model = ai.getGenerativeModel({ model: 'gemini-2.5-flash' });
-  const aiResponse = await model.generateContent({
+  const aiResponse = await ai.models.generateContent({
+    model: modelId,
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    generationConfig: {
+    config: {
       responseMimeType: 'text/plain',
     },
   });
 
-  return aiResponse.response.text().trim();
+  if (!aiResponse.text) {
+    throw new Error('AI response did not contain text');
+  }
+  return aiResponse.text.trim();
 };
 
 /**
@@ -342,18 +350,18 @@ LƯU Ý QUAN TRỌNG:
 - Trả lời trực tiếp vào câu hỏi, ngắn gọn nhưng đầy đủ ý nghĩa (khoảng 3-5 câu hoặc phân tích ngắn).
   `;
 
-  const model = ai.getGenerativeModel({
-    model: 'gemini-2.5-flash',
-    systemInstruction,
-  });
-
-  const aiResponse = await model.generateContent({
+  const aiResponse = await ai.models.generateContent({
+    model: modelId,
     contents,
-    generationConfig: {
+    config: {
+      systemInstruction,
       responseMimeType: 'text/plain',
     },
   });
 
-  return aiResponse.response.text().trim();
+  if (!aiResponse.text) {
+    throw new Error('AI response did not contain text');
+  }
+  return aiResponse.text.trim();
 };
 
