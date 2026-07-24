@@ -41,7 +41,7 @@ const getAllowedOrigin = () => {
 
 const corsOptions = {
   origin: getAllowedOrigin(),
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Secret'],
 };
 app.use(cors(corsOptions));

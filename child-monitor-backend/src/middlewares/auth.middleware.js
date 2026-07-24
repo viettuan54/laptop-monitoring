@@ -54,7 +54,7 @@ module.exports = async (req, res, next) => {
     let userResult;
     try {
       userResult = await adminPool.query(
-        'SELECT user_id, name, email, role, token_version FROM users WHERE user_id = $1',
+        'SELECT user_id, name, email, role, token_version, is_active FROM users WHERE user_id = $1',
         [decoded.user_id]
       );
     } catch (dbError) {
@@ -68,6 +68,9 @@ module.exports = async (req, res, next) => {
     }
 
     const dbUser = userResult.rows[0];
+    if (!dbUser.is_active) {
+      return res.status(401).json({ message: 'Account has been disabled' });
+    }
     // Kiểm tra token_version để vô hiệu hóa phiên khi mật khẩu thay đổi
     // Fail closed for legacy/malformed tokens without token_version. Otherwise
     // such tokens would survive password changes until their normal expiry.

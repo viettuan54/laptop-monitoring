@@ -147,7 +147,7 @@ exports.login = async (req, res) => {
 
   try {
     const result = await adminPool.query(
-      'SELECT user_id, name, email, password, role, is_verified, token_version FROM users WHERE LOWER(email)=LOWER($1)',
+      'SELECT user_id, name, email, password, role, is_verified, is_active, token_version FROM users WHERE LOWER(email)=LOWER($1)',
       [normalizedEmail]
     );
 
@@ -171,6 +171,10 @@ exports.login = async (req, res) => {
         return res.status(429).json({ message: 'Too many failed attempts. This account is temporarily locked. Please try again in 15 minutes.' });
       }
       return res.status(401).json({ message: 'Invalid email or password' });
+    }
+
+    if (!user.is_active) {
+      return res.status(403).json({ message: 'Account has been disabled. Contact an administrator.' });
     }
 
     // Đảm bảo kiểm tra xác minh email CHỈ sau khi đã đúng password
@@ -527,7 +531,7 @@ exports.refresh = async (req, res) => {
     const dbToken = consumedToken.rows[0];
 
     const userResult = await dbClient.query(
-      'SELECT token_version FROM users WHERE user_id = $1',
+      'SELECT token_version, is_active FROM users WHERE user_id = $1',
       [dbToken.user_id]
     );
 
@@ -538,6 +542,11 @@ exports.refresh = async (req, res) => {
     }
 
     const user = userResult.rows[0];
+    if (!user.is_active) {
+      await dbClient.query('ROLLBACK');
+      transactionOpen = false;
+      return res.status(401).json({ message: 'Account has been disabled' });
+    }
 
     // Sinh access token mới và refresh token mới
     const jti = uuidv4();

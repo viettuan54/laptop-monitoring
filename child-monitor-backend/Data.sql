@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS users (
     password    VARCHAR(255) NOT NULL,
     role        user_role DEFAULT 'parent',
     is_verified BOOLEAN DEFAULT FALSE,
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE,
     verification_token VARCHAR(64),
     verification_token_expires TIMESTAMP,
     reset_token VARCHAR(64),

@@ -8,32 +8,59 @@ const { recordAudit } = require('../services/audit.service');
  * Chỉ admin mới có quyền truy cập (được enforce bởi requireRole('admin')).
  */
 exports.getUsers = async (req, res) => {
-  let { limit, offset } = req.query;
+  let { limit, offset, search, role, status } = req.query;
 
   limit = Math.min(parseInt(limit) || 50, 500);
   offset = Math.max(parseInt(offset) || 0, 0);
 
+  const conditions = [];
+  const params = [];
+  if (search) {
+    const normalizedSearch = String(search).trim().substring(0, 100);
+    params.push(`%${normalizedSearch}%`);
+    conditions.push(`(u.name ILIKE $${params.length} OR u.email ILIKE $${params.length})`);
+  }
+  if (role) {
+    if (!['parent', 'admin'].includes(role)) {
+      return res.status(400).json({ message: 'role must be parent or admin' });
+    }
+    params.push(role);
+    conditions.push(`u.role = $${params.length}::user_role`);
+  }
+  if (status) {
+    if (!['active', 'disabled'].includes(status)) {
+      return res.status(400).json({ message: 'status must be active or disabled' });
+    }
+    params.push(status === 'active');
+    conditions.push(`u.is_active = $${params.length}`);
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  params.push(limit);
+  const limitPosition = params.length;
+  params.push(offset);
+  const offsetPosition = params.length;
+
   try {
-    // Single query combining user retrieval and total count via JSON aggregation.
-    // This always returns 1 row containing both the total count and the paginated user list.
     const result = await adminPool.query(
-      `SELECT 
-         (SELECT COUNT(*) FROM users) AS total,
-         COALESCE(json_agg(t), '[]'::json) AS data
-       FROM (
-         SELECT user_id, name, email, role, created_at
-         FROM users
-         ORDER BY created_at DESC
-         LIMIT $1 OFFSET $2
-       ) t`,
-      [limit, offset]
+      `SELECT u.user_id, u.name, u.email, u.role, u.is_verified, u.is_active,
+              u.created_at,
+              (SELECT COUNT(*)::INTEGER FROM children c WHERE c.user_id = u.user_id) AS child_count,
+              (SELECT COUNT(*)::INTEGER
+                 FROM devices d
+                 JOIN children c ON c.child_id = d.child_id
+                WHERE c.user_id = u.user_id) AS device_count,
+              COUNT(*) OVER()::INTEGER AS total_count
+         FROM users u
+         ${where}
+        ORDER BY u.created_at DESC
+        LIMIT $${limitPosition} OFFSET $${offsetPosition}`,
+      params
     );
 
-    const { total, data } = result.rows[0];
-
     res.json({
-      data,
-      total: parseInt(total) || 0,
+      data: result.rows.map(({ total_count, ...user }) => user),
+      total: result.rows[0]?.total_count || 0,
       limit,
       offset,
     });
@@ -183,6 +210,230 @@ exports.addBlacklist = async (req, res) => {
       return res.status(409).json({ message: 'Domain already in blacklist' });
     }
     console.error('Admin addBlacklist error:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  } finally {
+    client.release();
+  }
+};
+
+const parseUserId = (value) => {
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : null;
+};
+
+/**
+ * GET /api/admin/users/:id
+ * Hồ sơ quản trị tổng hợp, không trả password/token/secret.
+ */
+exports.getUserDetails = async (req, res) => {
+  const userId = parseUserId(req.params.id);
+  if (!userId) {
+    return res.status(400).json({ message: 'User id must be a positive integer' });
+  }
+
+  try {
+    const [userResult, childrenResult, devicesResult] = await Promise.all([
+      adminPool.query(
+        `SELECT user_id, name, email, role, is_verified, is_active, created_at
+           FROM users WHERE user_id = $1`,
+        [userId]
+      ),
+      adminPool.query(
+        `SELECT c.child_id, c.name, c.age, c.created_at,
+                COUNT(d.device_id)::INTEGER AS device_count
+           FROM children c
+           LEFT JOIN devices d ON d.child_id = c.child_id
+          WHERE c.user_id = $1
+          GROUP BY c.child_id
+          ORDER BY c.created_at DESC`,
+        [userId]
+      ),
+      adminPool.query(
+        `SELECT d.device_id, d.child_id, d.device_name, d.device_uid,
+                d.last_seen_at, d.created_at
+           FROM devices d
+           JOIN children c ON c.child_id = d.child_id
+          WHERE c.user_id = $1
+          ORDER BY d.created_at DESC`,
+        [userId]
+      ),
+    ]);
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({
+      user: userResult.rows[0],
+      children: childrenResult.rows,
+      devices: devicesResult.rows,
+    });
+  } catch (error) {
+    console.error('Admin getUserDetails error:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+/**
+ * PATCH /api/admin/users/:id
+ * Body cho phép: { role, is_active, is_verified }.
+ */
+exports.updateUser = async (req, res) => {
+  const userId = parseUserId(req.params.id);
+  if (!userId) {
+    return res.status(400).json({ message: 'User id must be a positive integer' });
+  }
+
+  const body = req.body || {};
+  const hasRole = Object.prototype.hasOwnProperty.call(body, 'role');
+  const hasActive = Object.prototype.hasOwnProperty.call(body, 'is_active');
+  const hasVerified = Object.prototype.hasOwnProperty.call(body, 'is_verified');
+  const { role, is_active, is_verified } = body;
+
+  if (!hasRole && !hasActive && !hasVerified) {
+    return res.status(400).json({ message: 'At least one editable field is required' });
+  }
+  if (hasRole && !['parent', 'admin'].includes(role)) {
+    return res.status(400).json({ message: 'role must be parent or admin' });
+  }
+  if (hasActive && typeof is_active !== 'boolean') {
+    return res.status(400).json({ message: 'is_active must be a boolean' });
+  }
+  if (hasVerified && typeof is_verified !== 'boolean') {
+    return res.status(400).json({ message: 'is_verified must be a boolean' });
+  }
+  if (userId === req.currentUser.user_id && ((hasRole && role !== 'admin') || (hasActive && !is_active))) {
+    return res.status(400).json({ message: 'You cannot demote or disable your own admin account' });
+  }
+
+  const client = await adminPool.connect();
+  try {
+    await client.query('BEGIN');
+    const currentResult = await client.query(
+      `SELECT user_id, name, email, role, is_verified, is_active
+         FROM users WHERE user_id = $1 FOR UPDATE`,
+      [userId]
+    );
+    if (currentResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const current = currentResult.rows[0];
+    const nextRole = hasRole ? role : current.role;
+    const nextActive = hasActive ? is_active : current.is_active;
+    const nextVerified = hasVerified ? is_verified : current.is_verified;
+    const revokeSessions = nextRole !== current.role || nextActive !== current.is_active;
+
+    const updatedResult = await client.query(
+      `UPDATE users
+          SET role = $1::user_role,
+              is_active = $2,
+              is_verified = $3,
+              token_version = token_version + $4
+        WHERE user_id = $5
+        RETURNING user_id, name, email, role, is_verified, is_active, created_at`,
+      [nextRole, nextActive, nextVerified, revokeSessions ? 1 : 0, userId]
+    );
+
+    if (revokeSessions) {
+      await client.query('DELETE FROM refresh_tokens WHERE user_id = $1', [userId]);
+    }
+
+    const changes = {};
+    for (const field of ['role', 'is_active', 'is_verified']) {
+      if (current[field] !== updatedResult.rows[0][field]) {
+        changes[field] = { from: current[field], to: updatedResult.rows[0][field] };
+      }
+    }
+    await recordAudit(client, req, {
+      action: 'user.update',
+      targetType: 'user',
+      targetId: userId,
+      metadata: { email: current.email, changes, sessions_revoked: revokeSessions },
+    });
+    await client.query('COMMIT');
+    res.json(updatedResult.rows[0]);
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('Admin updateUser error:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  } finally {
+    client.release();
+  }
+};
+
+exports.revokeUserSessions = async (req, res) => {
+  const userId = parseUserId(req.params.id);
+  if (!userId) {
+    return res.status(400).json({ message: 'User id must be a positive integer' });
+  }
+
+  const client = await adminPool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `UPDATE users SET token_version = token_version + 1
+        WHERE user_id = $1
+        RETURNING user_id, email`,
+      [userId]
+    );
+    if (result.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ message: 'User not found' });
+    }
+    await client.query('DELETE FROM refresh_tokens WHERE user_id = $1', [userId]);
+    await recordAudit(client, req, {
+      action: 'user.revoke_sessions',
+      targetType: 'user',
+      targetId: userId,
+      metadata: { email: result.rows[0].email },
+    });
+    await client.query('COMMIT');
+    res.json({ message: 'All user sessions have been revoked', user_id: userId });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('Admin revokeUserSessions error:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  } finally {
+    client.release();
+  }
+};
+
+exports.deleteUser = async (req, res) => {
+  const userId = parseUserId(req.params.id);
+  if (!userId) {
+    return res.status(400).json({ message: 'User id must be a positive integer' });
+  }
+  if (userId === req.currentUser.user_id) {
+    return res.status(400).json({ message: 'You cannot delete your own admin account' });
+  }
+
+  const client = await adminPool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      'SELECT user_id, name, email, role FROM users WHERE user_id = $1 FOR UPDATE',
+      [userId]
+    );
+    if (result.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const target = result.rows[0];
+    await recordAudit(client, req, {
+      action: 'user.delete',
+      targetType: 'user',
+      targetId: userId,
+      metadata: { email: target.email, name: target.name, role: target.role },
+    });
+    await client.query('DELETE FROM users WHERE user_id = $1', [userId]);
+    await client.query('COMMIT');
+    res.json({ message: 'User and associated data deleted', user_id: userId });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('Admin deleteUser error:', error);
     res.status(500).json({ message: 'Internal server error' });
   } finally {
     client.release();

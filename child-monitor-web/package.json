@@ -1,0 +1,14 @@
+{
+  "name": "child-monitor-parent-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Parent Web Dashboard cho Laptop Monitor",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check app.js && node --check server.js",
+    "test": "node --test test/smoke.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

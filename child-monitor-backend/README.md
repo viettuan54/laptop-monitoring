@@ -15,7 +15,7 @@ Hệ thống giám sát laptop trẻ em (Backend API).
 
 ## Cấu hình production
 
-Chạy lần lượt toàn bộ migration đến `migration_v11.sql`.
+Chạy lần lượt toàn bộ migration đến `migration_v12.sql`.
 
 Production bắt buộc cấu hình:
 
